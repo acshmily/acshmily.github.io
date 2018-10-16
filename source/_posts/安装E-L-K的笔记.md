@@ -5,6 +5,7 @@ tags:
 	-	ELK
 	-	nginx
 	-	springboot
+categories:	工作笔记
 ---
 
 # 关于搭建E.L.K的笔记
