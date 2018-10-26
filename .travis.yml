@@ -14,8 +14,8 @@ script:
 after_script:
   - cd ./public
   - git init
-  - git config user.name "acshmily" --{GitHub账户名称}
-  - git config user.email "shmily@miku.tw" --{Github账户邮箱}
+  - git config user.name "acshmily"
+  - git config user.email "shmily@miku.tw"
   - git add .
   - git commit -m "Update docs"
   - git push --force --quiet "https://${GH_TOKEN}@${GH_REF}" master:master
@@ -23,7 +23,7 @@ after_script:
 
 branches:
   only:
-    - backup --{Hexo源码分支名称}
+    - backup
 env:
  global:
-   - GH_REF: github.com/acshmily/acshmily.github.io.git --{仓库地址}
+   - GH_REF: github.com/acshmily/acshmily.github.io.git
