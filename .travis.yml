@@ -15,7 +15,7 @@ after_script:
   - cd ./public
   - git init
   - git config user.name "acshmily"
-  - git config user.email "shmily@miku.tw"
+  - git config user.email "shmily#newbie.town"
   - git add .
   - git commit -m "Update docs"
   - git push --force --quiet "https://${GH_TOKEN}@${GH_REF}" master:master
