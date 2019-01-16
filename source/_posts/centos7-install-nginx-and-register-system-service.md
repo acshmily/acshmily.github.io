@@ -20,11 +20,11 @@ tags: nginx 不务正业 centos
 
 1. 最新的Nginx源代码 
 
-   [地址点我]: https://nginx.org/en/download.html	"Nginx下载官网"
+	https://nginx.org/en/download.html
 
 2. 下载ngx_log_if模块,保存 ngx_http_aclog_bypass_module.c 以及config文件，保存为文件夹名为 ngx_log_if
 
-   [ngx_log_if模块github项目]: https://github.com/cfsego/ngx_log_if	"ngx_log_if"
+	https://github.com/cfsego/ngx_log_if	
 
 ## 安装
 
@@ -52,7 +52,11 @@ tags: nginx 不务正业 centos
    make && make install
    ```
 
-##配置	
+
+
+## 进行配置
+
+
 
 
    ```
