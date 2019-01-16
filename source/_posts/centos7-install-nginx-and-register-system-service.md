@@ -1,7 +1,10 @@
 ---
 title: 在Centos7下手动安装NGINX并注册为服务
 date: 2019-01-16 13:45:17
-tags: nginx 不务正业 centos
+tags: 
+	-	nginx 
+	-	不务正业
+	-	centos
 ---
 
 # 在Centos7下手动安装NGINX并注册为服务
