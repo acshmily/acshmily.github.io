@@ -10,11 +10,11 @@ tags: nginx 不务正业 centos
 
 ## 目标	
 
-- [ ] 安装最新的Nginx
+-  安装最新的Nginx
 
-- [ ] 添加ngx_log_if模块
+-  添加ngx_log_if模块
 
-- [ ] 注册为centos的服务并开机自动重启
+-  注册为centos的服务并开机自动重启
 
 ## 准备工作
 
@@ -52,16 +52,14 @@ tags: nginx 不务正业 centos
    make && make install
    ```
 
-
 ##配置	
 
-1.  
 
    ```
    vim /etc/init.d/nginx
    ```
 
-2. 参考配置，代码块内nginx=以及NGINX_CONF_FILE按照你的nginx配置进行修改
+ 参考配置，代码块内nginx=以及NGINX_CONF_FILE按照你的nginx配置进行修改
 
    ```
    #!/bin/sh
@@ -197,19 +195,19 @@ tags: nginx 不务正业 centos
    esac
    ```
 
-3. 修改权限
+修改权限
 
       ```
        chmod 755 /etc/init.d/nginx
       ```
 
-4. 添加系统服务
+ 添加系统服务
 
 	```
 	 		vim /lib/systemd/system/nginx.service  
 	```
 
-5. 修改为以下内容，部分配置变量需要结合实际进行修改
+修改为以下内容，部分配置变量需要结合实际进行修改
 
    ```
    
@@ -230,7 +228,7 @@ tags: nginx 不务正业 centos
    [Install]
    WantedBy=multi-user.target
    ```
-   6.相关命令
+相关命令
 
    ```
    #开机自启动
