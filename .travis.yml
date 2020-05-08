@@ -1,14 +1,17 @@
 language: node_js
 node_js: stable
 
+before_install:
+	- npm install hexo-cli -g
 # S: Build Lifecycle
 install:
-  - npm install
+	- npm install
 
 #before_script:
  # - npm install -g gulp
 
 script:
+  - hexo clean
   - hexo g
 
 after_script:
