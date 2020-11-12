@@ -158,7 +158,7 @@ class JsonTest {
         log.info('开始从Redis反序列化')
         def start = System.currentTimeMillis()
         for (int i = 0; i < 100000; i++) {
-            beans = redisTemplate.boundValueOps(_PREFIX + i)
+            beans = redisTemplate.boundValueOps(_PREFIX + i).get()
         }
         def end = System.currentTimeMillis()
         log.info('读取结束，消耗时间:{}', end - start)
