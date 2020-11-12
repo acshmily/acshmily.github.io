@@ -37,21 +37,21 @@ tags:
 
 2. 解下tar -zxvf Nginx.tar.gz
 
-3. ```
+3. ```shell
    cd Nginx
    ```
 
-4. ```
+4. ```shell
    useradd -s /sbin/nologin nginx -M  
    ```
 
-5. ```
+5. ```shell
    ./configure --prefix=/usr/local/nginx  --user=nginx --group=nginx --with-http_stub_status_module  --with-http_ssl_module --add-module=/home/hbadmin/ngx_log_if
    ```
 
    注意：--prefix 代表即将编译的目标路径 --user 运行的用户 --group代表用户组 --with代表安装哪些模块 --add-moudle代表外部加载模块
 
-6. ```
+6. ```shell
    make && make install
    ```
 
@@ -62,13 +62,13 @@ tags:
 
 
 
-   ```
+   ```shell
    vim /etc/init.d/nginx
    ```
 
  参考配置，代码块内nginx=以及NGINX_CONF_FILE按照你的nginx配置进行修改
 
-   ```
+   ```shell
    #!/bin/sh
    #
    # nginx - this script starts and stops the nginx daemon
@@ -204,19 +204,21 @@ tags:
 
 修改权限
 
-      ```
-       chmod 755 /etc/init.d/nginx
-      ```
+```shell
+   chmod 755 /etc/init.d/nginx
+```
 
  添加系统服务
 
-	```
-	 		vim /lib/systemd/system/nginx.service  
-	```
+```shell
+
+ 		vim /lib/systemd/system/nginx.service  
+
+```
 
 修改为以下内容，部分配置变量需要结合实际进行修改
 
-   ```
+   ```shell
    
    [Unit]
    Description=nginx - high performance web server
@@ -237,7 +239,7 @@ tags:
    ```
 相关命令
 
-   ```
+   ```shell
    #开机自启动
    systemctl enable nginx.service
    #停止开机自启动

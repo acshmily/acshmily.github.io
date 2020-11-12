@@ -22,7 +22,7 @@ categories:	工作笔记
 
 ​	对nginx输出的日志格式进行定义，由于E.L.K的Grok比较繁琐，故采用JSON格式进行传输。对nginx.conf进行修改配置，格式参考如下：
 
-```
+```shell
         log_format json '{ "@timestamp": "$time_iso8601", '
          '"remote_addr": "$remote_addr", '
          '"remote_user": "$remote_user", '
@@ -40,7 +40,7 @@ categories:	工作笔记
 
 配置完毕后可以对nginx进行reload，并尝试访问。如果正常应该返回类似如下日志：
 
-```
+```shell
 114.114.114.114 - - [08/Oct/2018:21:47:04 -0400] "GET / HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36" "-"
 172.30.0.51 - - [08/Oct/2018:21:47:05 -0400] "GET / HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36" "-"
 ```
@@ -49,13 +49,13 @@ categories:	工作笔记
 
 ​	由于E.L.K套件是运行在JAVA8上，所以需要安装相应依赖。
 
-```
+```shell
 yum -y install java8
 ```
 
 ​	安装成功请使用
 
-```
+```shell
 java -version
 ```
 
@@ -66,11 +66,11 @@ java -version
 ### 添加E.L.K的GPG-KEY
 
 ​	rpm --import https://artifacts.elastic.co/GPG-KEY-elasticsearch (需要关闭服务器IPV6寻址服务)
-	增加repo 官方文档提示为 
+​	增加repo 官方文档提示为 
 
 > Add the following in your /etc/yum.repos.d/ directory in a file with a .repo suffix, for example logstash.repo
 
-```
+```shell
 	[logstash-6.x]
 	name=Elastic repository for 6.x packages
 	baseurl=https://artifacts.elastic.co/packages/6.x/yum
@@ -83,7 +83,7 @@ java -version
 
 ​	安装logstash 
 
-```
+```shell
 	sudo yum install logstash
 ```
 
@@ -91,14 +91,14 @@ java -version
 
 #### 1.备份原有默认配置
 
-```
+```shell
 mkdir /opt/backups/logstash -p
 mv /etc/logstash/logstash.yml /opt/backups/logstash/logstash.yml.BAK
 ```
 
 #### 2.配置GeoIP
 
-```
+```shell
 cd /etc/logstash/
 wget http://geolite.maxmind.com/download/geoip/database/GeoLite2-City.mmdb.gz
 gunzip GeoLite2-City.mmdb.gz
@@ -108,7 +108,7 @@ gunzip GeoLite2-City.mmdb.gz
 
 Logstash需要安装插件,跳转到lgostash/bin目录下 执行
 
-```
+```shell
  1)在线安装    ./logstash-plugin install logstash-codec-json_lines
  2)离线安装    https://rubygems.org/gems/logstash-codec-json_lines
  
@@ -120,7 +120,7 @@ Logstash需要安装插件,跳转到lgostash/bin目录下 执行
 
 在路径/etc/logstash/conf.d/下创建nginx.conf，下文中的#请在使用时删除，避免无法运行
 
-```
+```json
 input {
     file {#文件模式解析
         type = >"nginx_access" #定义类型
@@ -180,13 +180,13 @@ filter {
 
 安装很简单不在此文具体表述，注意不要使用root账户去运行elasticsearch
 
-```
+```shell
 yum -y install elasticsearch
 ```
 
 启动执行
 
-```
+```shell
 systemctl start elasticsearch.service
 ```
 
@@ -198,7 +198,7 @@ yum -y install kibana
 
 启动
 
-```
+```shell
 systemctl start kabana.service
 ```
 
@@ -238,7 +238,7 @@ systemctl start kabana.service
 
 增加解析Logstash的配置模板
 
-```
+```json
 input {
     tcp {
         port => 4560   
@@ -259,7 +259,7 @@ output{
 
 E.L.K安装并不复杂，复杂是在启动配置，对于较多系统logstash配置往往会出错可以使用
 
-```
+```shell
 cat /etc/logstash/conf.d/* > /tmp/total.conf
 ```
 
