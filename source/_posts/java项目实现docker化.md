@@ -17,7 +17,7 @@ tags:
 
 运行`brew verison`应该会正常显示docker的相关信息，由于docker安装的时候hub默认为hub.docker.com，国内访问比较缓慢，为了更好的开发效率，进行国内镜像配置，具体可以自行google，推荐 阿里云、网易云等开源服务
 
-![image-20201123164037294](/Users/huanghongzhi/blog/acshmilyBlog/source/_posts/java项目实现docker化/image-20201123164037294.png)
+![image-20201123164037294](image-20201123164037294.png)
 
 ## 项目调整
 
