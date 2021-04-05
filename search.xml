@@ -1,0 +1,751 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search>
+  <entry>
+    <title>Hello TravisCi</title>
+    <url>/2018/08/09/Hello_TravisCI/</url>
+    <content><![CDATA[<h1 id="Hello-TravisCI"><a href="#Hello-TravisCI" class="headerlink" title="Hello TravisCI"></a>Hello TravisCI</h1><p>这是基于Travis CI进行自动化的测试文章</p>
+]]></content>
+      <tags>
+        <tag>TravisCi</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Redis集群踩坑笔记</title>
+    <url>/2020/11/12/Redis%E9%9B%86%E7%BE%A4%E8%B8%A9%E5%9D%91%E7%AC%94%E8%AE%B0/</url>
+    <content><![CDATA[<h2 id="背景"><a href="#背景" class="headerlink" title="背景"></a>背景</h2><p>​        由于安全小组对于内网环境要求升级，对于原先的Redis集群需要进行IP过滤以及密码设置。由于之前开发同事部署集群的时候并未设置密码，选择了一个良辰吉日进行了密码设置然后重启了Redis服务，后面有意思的事情就来了T.T</p>
+<h2 id="Spring-Boot多集群配置"><a href="#Spring-Boot多集群配置" class="headerlink" title="Spring Boot多集群配置"></a>Spring Boot多集群配置</h2><p>​        由于我们将缓存服务抽象成了一个服务层，这个服务层对应用服务器暴露标准接口进行数据存储调用，在Spring Boot2.3.3及以下版本由于RedisTemplate自动配置其实是存在缺陷的。</p>
+<p>缺陷一：需要手动开启刷新拓扑配置</p>
+<p>缺陷二：需要手动开启自动自适应</p>
+<p>由于之前集群都并未设置密码，所以原先的代码片段为</p>
+<figure class="highlight groovy"><figcaption><span>diff</span></figcaption><table><tr><td class="code"><pre><span class="line"><span class="keyword">protected</span> RedisConnectionFactory buildRedisConnectionFactory(RedisProperties redisProperty) &#123;</span><br><span class="line">        <span class="keyword">if</span> (redisProperty == <span class="literal">null</span>) &#123;</span><br><span class="line">            <span class="comment">//创建默认的redis连接工厂</span></span><br><span class="line">            LettuceConnectionFactory defaultConnectionFactory = createDefaultConnectionFactory()</span><br><span class="line">            defaultConnectionFactory.afterPropertiesSet()</span><br><span class="line">            <span class="keyword">return</span> defaultConnectionFactory</span><br><span class="line">        &#125;</span><br><span class="line">        LettuceClientConfiguration clientConfig</span><br><span class="line">        <span class="comment">//创建lettuce连接工厂</span></span><br><span class="line">        LettuceConnectionFactory redisConnectionFactory</span><br><span class="line">        <span class="keyword">if</span> (getRedisMode(redisProperty) == RedisModeEnum.CLUSTER) &#123;</span><br><span class="line">            <span class="comment">//支持自适应集群拓扑刷新和静态刷新源</span></span><br><span class="line"></span><br><span class="line">            ClusterTopologyRefreshOptions clusterTopologyRefreshOptions = ClusterTopologyRefreshOptions.builder()</span><br><span class="line">                    .enablePeriodicRefresh()</span><br><span class="line">                    .enableAdaptiveRefreshTrigger(ClusterTopologyRefreshOptions.RefreshTrigger.PERSISTENT_RECONNECTS, ClusterTopologyRefreshOptions.RefreshTrigger.MOVED_REDIRECT)</span><br><span class="line">                    .build()</span><br><span class="line">            ClusterClientOptions clusterClientOptions = ClusterClientOptions.builder().topologyRefreshOptions(clusterTopologyRefreshOptions).build()</span><br><span class="line"></span><br><span class="line">            clientConfig = buildLettuceClientConfiguration(DefaultClientResources.create(),</span><br><span class="line">                    redisProperty.getLettuce().getPool(), redisProperty, clusterClientOptions)</span><br><span class="line">            redisConnectionFactory = <span class="keyword">new</span> LettuceConnectionFactory(<span class="keyword">new</span> RedisClusterConfiguration(redisProperty.getCluster().getNodes()), clientConfig)</span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (getRedisMode(redisProperty) == RedisModeEnum.SENTINEL) &#123;</span><br><span class="line">            clientConfig = buildLettuceClientConfiguration(DefaultClientResources.create(),</span><br><span class="line">                    redisProperty.getLettuce().getPool(), redisProperty)</span><br><span class="line">            redisConnectionFactory = <span class="keyword">new</span> LettuceConnectionFactory(<span class="keyword">new</span> RedisSentinelConfiguration</span><br><span class="line">                    (redisProperty.getSentinel().getMaster(), <span class="keyword">new</span> HashSet&lt;&gt;(redisProperty.getSentinel().getNodes())), clientConfig)</span><br><span class="line">        &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">            clientConfig = buildLettuceClientConfiguration(DefaultClientResources.create(),</span><br><span class="line">                    redisProperty.getLettuce().getPool(), redisProperty)</span><br><span class="line">            redisConnectionFactory = <span class="keyword">new</span> LettuceConnectionFactory(<span class="keyword">new</span> RedisStandaloneConfiguration</span><br><span class="line">                    (redisProperty.getHost(), redisProperty.getPort()), clientConfig)</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        redisConnectionFactory.afterPropertiesSet()</span><br><span class="line">        <span class="keyword">return</span> redisConnectionFactory</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<p>当Redis设置密码以后刷新Redis会一直提示</p>
+<figure class="highlight verilog"><table><tr><td class="code"><pre><span class="line">NOAUTH Authentication required</span><br></pre></td></tr></table></figure>
+
+<p>后发现存在配置文件内设置的password并没有自动注入设置进去，需要手动设置，在Spring Boot 2.3.5后该问题依然未解决，但已经自动处理了自动刷新拓扑和自适应</p>
+<figure class="highlight diff"><table><tr><td class="code"><pre><span class="line">protected RedisConnectionFactory buildRedisConnectionFactory(RedisProperties redisProperty) &#123;</span><br><span class="line">        if (redisProperty == null) &#123;</span><br><span class="line">            //创建默认的redis连接工厂</span><br><span class="line">            LettuceConnectionFactory defaultConnectionFactory = createDefaultConnectionFactory()</span><br><span class="line">            defaultConnectionFactory.afterPropertiesSet()</span><br><span class="line">            return defaultConnectionFactory</span><br><span class="line">        &#125;</span><br><span class="line">        LettuceClientConfiguration clientConfig</span><br><span class="line">        //创建lettuce连接工厂</span><br><span class="line">        LettuceConnectionFactory redisConnectionFactory</span><br><span class="line">        if (getRedisMode(redisProperty) == RedisModeEnum.CLUSTER) &#123;</span><br><span class="line">            //支持自适应集群拓扑刷新和静态刷新源</span><br><span class="line"></span><br><span class="line">            ClusterTopologyRefreshOptions clusterTopologyRefreshOptions = ClusterTopologyRefreshOptions.builder()</span><br><span class="line">                    .enablePeriodicRefresh()</span><br><span class="line">                    .enableAdaptiveRefreshTrigger(ClusterTopologyRefreshOptions.RefreshTrigger.PERSISTENT_RECONNECTS, ClusterTopologyRefreshOptions.RefreshTrigger.MOVED_REDIRECT)</span><br><span class="line">                    .build()</span><br><span class="line">            ClusterClientOptions clusterClientOptions = ClusterClientOptions.builder().topologyRefreshOptions(clusterTopologyRefreshOptions).build()</span><br><span class="line"></span><br><span class="line">            clientConfig = buildLettuceClientConfiguration(DefaultClientResources.create(),</span><br><span class="line">                    redisProperty.getLettuce().getPool(), redisProperty, clusterClientOptions)</span><br><span class="line"><span class="addition">+            RedisClusterConfiguration config</span></span><br><span class="line"><span class="addition">+            if(StringUtils.isNotBlank(redisProperty.password))&#123;</span></span><br><span class="line"><span class="addition">+                config = new RedisClusterConfiguration(redisProperty.getCluster().getNodes())</span></span><br><span class="line"><span class="addition">+                log.info(&#x27;设置Redis密码:&#123;&#125;&#x27;,redisProperty.password)</span></span><br><span class="line"><span class="addition">+                config.setPassword(redisProperty.password)</span></span><br><span class="line"><span class="addition">+           &#125;else&#123;</span></span><br><span class="line"><span class="addition">+                config = new RedisClusterConfiguration(redisProperty.getCluster().getNodes())</span></span><br><span class="line"><span class="addition">+            &#125;</span></span><br><span class="line"><span class="deletion">-            redisConnectionFactory = new LettuceConnectionFactory(new RedisClusterConfiguration(redisProperty.getCluster().getNodes()), clientConfig)</span></span><br><span class="line"><span class="addition">+						 redisConnectionFactory = new LettuceConnectionFactory( config , clientConfig)</span></span><br><span class="line">        &#125; else if (getRedisMode(redisProperty) == RedisModeEnum.SENTINEL) &#123;</span><br><span class="line">            clientConfig = buildLettuceClientConfiguration(DefaultClientResources.create(),</span><br><span class="line">                    redisProperty.getLettuce().getPool(), redisProperty)</span><br><span class="line">            redisConnectionFactory = new LettuceConnectionFactory(new RedisSentinelConfiguration</span><br><span class="line">                    (redisProperty.getSentinel().getMaster(), new HashSet&lt;&gt;(redisProperty.getSentinel().getNodes())), clientConfig)</span><br><span class="line">        &#125; else &#123;</span><br><span class="line">            clientConfig = buildLettuceClientConfiguration(DefaultClientResources.create(),</span><br><span class="line">                    redisProperty.getLettuce().getPool(), redisProperty)</span><br><span class="line">            redisConnectionFactory = new LettuceConnectionFactory(new RedisStandaloneConfiguration</span><br><span class="line">                    (redisProperty.getHost(), redisProperty.getPort()), clientConfig)</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        redisConnectionFactory.afterPropertiesSet()</span><br><span class="line">        return redisConnectionFactory</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="是不是忘记了设置Redis集群的密码？"><a href="#是不是忘记了设置Redis集群的密码？" class="headerlink" title="是不是忘记了设置Redis集群的密码？"></a>是不是忘记了设置Redis集群的密码？</h2><p>​        好了，Redis集群在代码侧配置可以正常启动并且查询数据了，但是后面遇到个诡异的现象。可以查数据，但是无法更新数据！Why？当时的定位思路：</p>
+<ul>
+<li>是不是Redis连接工厂配置有问题？</li>
+<li>查看RedisTemplate 的set操作有没有异常</li>
+<li>检查集群是否正常</li>
+</ul>
+<p>结论：</p>
+<ul>
+<li>我进行了本地debug跟踪和复现，发现无法复现该问题，并且如果密码设置有问题的话应该也无法查出数据，排除该项</li>
+<li>由于我们的服务对RedisTemplate进行了封装，基本都有try…catch，日志上并未体现异常捕获，故对于RedisTemplate来说操作都是正常的</li>
+<li>那么，问题就应该出现在集群上了，经过与Redis负责部署维护的同事确认，他之前只设置了每个节点的Redis密码，并未设置<strong>集群密码</strong> ，后确认就是该问题导致出现了这么诡异的现象</li>
+</ul>
+<h2 id="结论"><a href="#结论" class="headerlink" title="结论"></a>结论</h2><ol>
+<li>对于RedisTemplate的操作是否成功现在不能完全依赖有没有报错，对于忘记设置集群密码的集群，RedisTemplate操作set并不会报错，这样会让人造成困惑，无法判断到底是哪儿出了问题</li>
+<li>不能盲目信任Spring Boot的AutoConfigure方法，有可能会忘记帮你set了password（单集群除外）</li>
+<li>RTFM、STFW也不好使</li>
+</ol>
+]]></content>
+      <tags>
+        <tag>Redis</tag>
+        <tag>Springboot</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>关于群晖DS215安装aria2</title>
+    <url>/2018/05/12/Synology-DS215Play-aria2-install/</url>
+    <content><![CDATA[<p>群晖其实默认自带了下载工具,如果没有特殊需求的用户其实无需额外再处理安装Aria2，首先我们需要了解**<a href="https://github.com/aria2/aria2">Aria2</a>**到底是什么东西,我们可以在Github上找到这个项目.项目介绍是这样写的:</p>
+<blockquote>
+<p>aria2 is a utility for downloading files. The supported protocols are HTTP(S), FTP, SFTP, BitTorrent, and Metalink. aria2 can download a file from multiple sources/protocols and tries to utilize your maximum download bandwidth. It supports downloading a file from HTTP(S)/FTP/SFTP and BitTorrent at the same time, while the data downloaded from HTTP(S)/FTP/SFTP is uploaded to the BitTorrent swarm. Using Metalink’s chunk checksums, aria2 automatically validates chunks of data while downloading a file like BitTorrent.</p>
+</blockquote>
+<p>翻译成中文大概是这样的意思:</p>
+<blockquote>
+<p>aria2是一个下载文件的工具,它支持的协议可以是Http(s),Ftp,SFTP,BT以及Metalink.aria2会尝试基于多并发协议以达到充分你的下载带宽的目的.若需要下载的文件已经被上传至BT流则aria2可以同时基于HTTP(S)/FTP/SFTP以及BT协议下载,基于Metalink的校验机制,aria2会实现基于BT下载一样的自动块校验.</p>
+</blockquote>
+<p>—— 介绍完毕,如果你觉得这个工具是你所需要的,可以继续往下看.同时你需要了解关于群晖系统的一些背景知识</p>
+<blockquote>
+<ul>
+<li>群晖NAS自带的DSM是基于Unix高度定制化的系统</li>
+<li>对于比较新款的型号可以直接在套件中心安装Docker,可以使用Docker直接安装aria2的Docker镜像</li>
+<li>aira2可以自行进行使用乌班图交叉编译&lt;比较折腾&gt;,同时需要匹配对应的Bootstrap</li>
+<li>本文目的是让你快速使用上aria2工具,故不会从技术实现代码上说明</li>
+</ul>
+</blockquote>
+<p>—— 我推荐使用群晖第三方安装库源的安装方式:</p>
+<ol>
+<li>打开群晖的套件中心添加第三方源,我推荐<a href="http://www.cphub.net/">http://www.cphub.net/</a></li>
+<li>而后可以在套件中心搜索**<a href="https://www.dd-wrt.com/wiki/index.php/Ipkg">IPKGui</a>**,如无法搜到结果可以直接访问cphub的网页版进入download板块找到该组建下载后直接在群晖上手动安装,IPKGui目前在cphub的资源地址为<a href="https://www.cphub.net/?p=ipkgui">https://www.cphub.net/?p=ipkgui</a></li>
+<li>安装完毕后建议先重启群晖的NAS系统,后在程序目录找到IPKGui这个程序打开搜索aria2即可直接完成安装</li>
+<li>若第三步安装失败,则需要在群晖设置里打开SSH权限,需要telnet进行cli方式安装文章下方会提供参考 </li>
+<li>群晖需要建立一个共享文件夹,例如aria2download,同时记录好这个文件夹在群晖的path路径</li>
+<li>确认步骤设置完毕则可以直接在telnet上执行启动aria2常驻</li>
+<li>验证,结束.</li>
+</ol>
+<h3 id="安装命令参考"><a href="#安装命令参考" class="headerlink" title="安装命令参考"></a>安装命令参考</h3><blockquote>
+<p>仅供参考,假定你已经安装了ssh或者telnet工具,群晖亦开启了ssh/telnet服务.并且上面的安装步骤 1 2 3 安装无异常,下方代码段凡涉及到**#**开头的行为说明,无需在终端中输入</p>
+</blockquote>
+<p>#获取root权限<br>sudo -i<br>#切换目录到 opt/bin 下<br>cd /opt/bin<br>#更新ipkg 软件版本信息<br>ipkg update<br>#安装aira2<br>ipkg install aria2<br>#启动,注意 –dir=后面为你创建的共享文件夹的路径,请对应使用正确的路径<br>aria2c –enable-rpc –rpc-listen-all=true –rpc-allow-origin-all –rpc-secret=bilibiliganbei –max-connection-per-server=16 –split=16 –min-split-size=1M –dir=/volume1/aria2download -D </p>
+<hr>
+<h2 id="浏览器上调用aria2推荐"><a href="#浏览器上调用aria2推荐" class="headerlink" title="浏览器上调用aria2推荐"></a>浏览器上调用aria2推荐</h2><p>可以使用<a href="https://github.com/CiChui/Ci-Aria2BDY/">Ci-Aria2BDY</a>里面有具体说明,github项目地址为:<a href="https://github.com/CiChui/Ci-Aria2BDY/">https://github.com/CiChui/Ci-Aria2BDY/</a></p>
+]]></content>
+      <categories>
+        <category>安装手册</category>
+      </categories>
+      <tags>
+        <tag>群晖</tag>
+        <tag>Synology</tag>
+        <tag>ds215</tag>
+        <tag>aria2</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>centos-ulimit-modify</title>
+    <url>/2019/10/15/centos-ulimit-modify/</url>
+    <content><![CDATA[<h1 id="调整centos7的ulimit相关配置"><a href="#调整centos7的ulimit相关配置" class="headerlink" title="调整centos7的ulimit相关配置"></a>调整centos7的ulimit相关配置</h1><p>​    针对大并发以及分布式系统，系统默认的句柄数、最大线程数等需要进行修改，由于centos7下的sshd大版本为<strong>8</strong>的调整策略和以往不同，需要修改三处。</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">vi /etc/security/limits.conf</span><br><span class="line">* soft nofile 40960</span><br><span class="line">* hard nofile 81920</span><br><span class="line">* soft nproc 40960</span><br><span class="line">* hard nproc 81920</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">vi /etc/pam.d/sshd</span><br><span class="line"><span class="meta">#</span><span class="bash">%PAM-1.0</span></span><br><span class="line">auth       include      system-auth</span><br><span class="line">account    required     pam_nologin.so</span><br><span class="line">account    include      system-auth</span><br><span class="line">password   include      system-auth</span><br><span class="line">session    optional     pam_keyinit.so force revoke</span><br><span class="line">session    include      system-auth</span><br><span class="line">session    required     pam_loginuid.so</span><br><span class="line">session    required     pam_limits.so</span><br></pre></td></tr></table></figure>
+
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">/etc/ssh/sshd_config  UsePAM  yes</span><br></pre></td></tr></table></figure>
+
+
+
+<p>退出登录后重新登录，进行验证</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">ulimit -n</span><br></pre></td></tr></table></figure>
+
+]]></content>
+      <categories>
+        <category>工作笔记</category>
+      </categories>
+      <tags>
+        <tag>linux</tag>
+        <tag>centos</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>在Centos7下手动安装NGINX并注册为服务</title>
+    <url>/2019/01/16/centos7-install-nginx-and-register-system-service/</url>
+    <content><![CDATA[<h1 id="在Centos7下手动安装NGINX并注册为服务"><a href="#在Centos7下手动安装NGINX并注册为服务" class="headerlink" title="在Centos7下手动安装NGINX并注册为服务"></a>在Centos7下手动安装NGINX并注册为服务</h1><p>​    由于公司部分服务器操作系统参差不齐并且Nignx版本也不尽一致，存在安全以及配置各种问题，索性安排同事全部推倒重来，由于团队任务过重，我也就来凑热闹来帮忙了。</p>
+<h2 id="目标"><a href="#目标" class="headerlink" title="目标"></a>目标</h2><ul>
+<li><p> 安装最新的Nginx</p>
+</li>
+<li><p> 添加ngx_log_if模块</p>
+</li>
+<li><p> 注册为centos的服务并开机自动重启</p>
+</li>
+</ul>
+<h2 id="准备工作"><a href="#准备工作" class="headerlink" title="准备工作"></a>准备工作</h2><ol>
+<li><p>最新的Nginx源代码 </p>
+<p> <a href="https://nginx.org/en/download.html">https://nginx.org/en/download.html</a></p>
+</li>
+<li><p>下载ngx_log_if模块,保存 ngx_http_aclog_bypass_module.c 以及config文件，保存为文件夹名为 ngx_log_if</p>
+<p> <a href="https://github.com/cfsego/ngx_log_if">https://github.com/cfsego/ngx_log_if</a>    </p>
+</li>
+</ol>
+<h2 id="安装"><a href="#安装" class="headerlink" title="安装"></a>安装</h2><p>​    本文以当前时间2019年01月16日最新NGINX版本号为1.15.8仅供参考</p>
+<ol>
+<li><p>上传 Nginx.tar.gz 以及ngx_log_if文件夹</p>
+</li>
+<li><p>解下tar -zxvf Nginx.tar.gz</p>
+</li>
+<li><pre><code class="shell">cd Nginx
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line"></span><br><span class="line">4. &#96;&#96;&#96;shell</span><br><span class="line">   useradd -s &#x2F;sbin&#x2F;nologin nginx -M  </span><br></pre></td></tr></table></figure>
+</code></pre>
+</li>
+<li><pre><code class="shell">./configure --prefix=/usr/local/nginx  --user=nginx --group=nginx --with-http_stub_status_module  --with-http_ssl_module --add-module=/home/hbadmin/ngx_log_if
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line"></span><br><span class="line">   注意：--prefix 代表即将编译的目标路径 --user 运行的用户 --group代表用户组 --with代表安装哪些模块 --add-moudle代表外部加载模块</span><br><span class="line"></span><br><span class="line">6. &#96;&#96;&#96;shell</span><br><span class="line">   make &amp;&amp; make install</span><br></pre></td></tr></table></figure>
+
+
+</code></pre>
+</li>
+</ol>
+<h2 id="进行配置"><a href="#进行配置" class="headerlink" title="进行配置"></a>进行配置</h2>   <figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">vim /etc/init.d/nginx</span><br></pre></td></tr></table></figure>
+
+<p> 参考配置，代码块内nginx=以及NGINX_CONF_FILE按照你的nginx配置进行修改</p>
+   <figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash">!/bin/sh</span></span><br><span class="line"><span class="meta">#</span></span><br><span class="line"><span class="bash"><span class="comment"># nginx - this script starts and stops the nginx daemon</span></span></span><br><span class="line"><span class="meta">#</span></span><br><span class="line"><span class="bash"><span class="comment"># chkconfig:   - 85 15</span></span></span><br><span class="line"><span class="meta">#</span><span class="bash"> description:  NGINX is an HTTP(S) server, HTTP(S) reverse \</span></span><br><span class="line"><span class="bash"><span class="comment">#               proxy and IMAP/POP3 proxy server</span></span></span><br><span class="line"><span class="meta">#</span><span class="bash">processname: nginx</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> config:      /etc/nginx/nginx.conf</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> config:      /etc/sysconfig/nginx</span></span><br><span class="line"><span class="meta">#</span><span class="bash">pidfile:     /usr/<span class="built_in">local</span>/nginx/logs/nginx.pid</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#</span><span class="bash"> Source <span class="keyword">function</span> library.</span></span><br><span class="line">. /etc/rc.d/init.d/functions</span><br><span class="line"></span><br><span class="line"><span class="meta">#</span><span class="bash"> Source networking configuration.</span></span><br><span class="line">. /etc/sysconfig/network</span><br><span class="line"></span><br><span class="line"><span class="meta">#</span><span class="bash"> Check that networking is up.</span></span><br><span class="line">[ &quot;$NETWORKING&quot; = &quot;no&quot; ] &amp;&amp; exit 0</span><br><span class="line"></span><br><span class="line">nginx=&quot;/usr/local/nginx/sbin/nginx&quot;</span><br><span class="line">prog=$(basename $nginx)</span><br><span class="line"></span><br><span class="line">NGINX_CONF_FILE=&quot;/usr/local/nginx/conf/nginx.conf&quot;</span><br><span class="line"></span><br><span class="line">[ -f /etc/sysconfig/nginx ] &amp;&amp; . /etc/sysconfig/nginx</span><br><span class="line"></span><br><span class="line">lockfile=/var/lock/subsys/nginx</span><br><span class="line"></span><br><span class="line">make_dirs() &#123;</span><br><span class="line"><span class="meta">   #</span><span class="bash"> make required directories</span></span><br><span class="line">   user=`$nginx -V 2&gt;&amp;1 | grep &quot;configure arguments:.*--user=&quot; | sed &#x27;s/[^*]*--user=\([^ ]*\).*/\1/g&#x27; -`</span><br><span class="line">   if [ -n &quot;$user&quot; ]; then</span><br><span class="line">      if [ -z &quot;`grep $user /etc/passwd`&quot; ]; then</span><br><span class="line">         useradd -M -s /bin/nologin $user</span><br><span class="line">      fi</span><br><span class="line">      options=`$nginx -V 2&gt;&amp;1 | grep &#x27;configure arguments:&#x27;`</span><br><span class="line">      for opt in $options; do</span><br><span class="line">          if [ `echo $opt | grep &#x27;.*-temp-path&#x27;` ]; then</span><br><span class="line">              value=`echo $opt | cut -d &quot;=&quot; -f 2`</span><br><span class="line">              if [ ! -d &quot;$value&quot; ]; then</span><br><span class="line">                  # echo &quot;creating&quot; $value</span><br><span class="line">                  mkdir -p $value &amp;&amp; chown -R $user $value</span><br><span class="line">              fi</span><br><span class="line">          fi</span><br><span class="line">       done</span><br><span class="line">    fi</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">start() &#123;</span><br><span class="line">    [ -x $nginx ] || exit 5</span><br><span class="line">    [ -f $NGINX_CONF_FILE ] || exit 6</span><br><span class="line">    make_dirs</span><br><span class="line">    echo -n $&quot;Starting $prog: &quot;</span><br><span class="line">    daemon $nginx -c $NGINX_CONF_FILE</span><br><span class="line">    retval=$?</span><br><span class="line">    echo</span><br><span class="line">    [ $retval -eq 0 ] &amp;&amp; touch $lockfile</span><br><span class="line">    return $retval</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">stop() &#123;</span><br><span class="line">    echo -n $&quot;Stopping $prog: &quot;</span><br><span class="line">    killproc $prog -QUIT</span><br><span class="line">    retval=$?</span><br><span class="line">    echo</span><br><span class="line">    [ $retval -eq 0 ] &amp;&amp; rm -f $lockfile</span><br><span class="line">    return $retval</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">restart() &#123;</span><br><span class="line">    configtest || return $?</span><br><span class="line">    stop</span><br><span class="line">    sleep 1</span><br><span class="line">    start</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">reload() &#123;</span><br><span class="line">    configtest || return $?</span><br><span class="line">    echo -n $&quot;Reloading $prog: &quot;</span><br><span class="line">    killproc $nginx -HUP</span><br><span class="line">    RETVAL=$?</span><br><span class="line">    echo</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">force_reload() &#123;</span><br><span class="line">    restart</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">configtest() &#123;</span><br><span class="line"><span class="meta">  $</span><span class="bash">nginx -t -c <span class="variable">$NGINX_CONF_FILE</span></span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">rh_status() &#123;</span><br><span class="line">    status $prog</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">rh_status_q() &#123;</span><br><span class="line">    rh_status &gt;/dev/null 2&gt;&amp;1</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">case &quot;$1&quot; in</span><br><span class="line">    start)</span><br><span class="line">        rh_status_q &amp;&amp; exit 0</span><br><span class="line">        $1</span><br><span class="line">        ;;</span><br><span class="line">    stop)</span><br><span class="line">        rh_status_q || exit 0</span><br><span class="line">        $1</span><br><span class="line">        ;;</span><br><span class="line">    restart|configtest)</span><br><span class="line">        $1</span><br><span class="line">        ;;</span><br><span class="line">    reload)</span><br><span class="line">        rh_status_q || exit 7</span><br><span class="line">        $1</span><br><span class="line">        ;;</span><br><span class="line">    force-reload)</span><br><span class="line">        force_reload</span><br><span class="line">        ;;</span><br><span class="line">    status)</span><br><span class="line">        rh_status</span><br><span class="line">        ;;</span><br><span class="line">    condrestart|try-restart)</span><br><span class="line">        rh_status_q || exit 0</span><br><span class="line">            ;;</span><br><span class="line">    *)</span><br><span class="line">        echo $&quot;Usage: $0 &#123;start|stop|status|restart|condrestart|try-restart|reload|force-reload|configtest&#125;&quot;</span><br><span class="line">        exit 2</span><br><span class="line">esac</span><br></pre></td></tr></table></figure>
+
+<p>修改权限</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">chmod 755 /etc/init.d/nginx</span><br></pre></td></tr></table></figure>
+
+<p> 添加系统服务</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"></span><br><span class="line">vim /lib/systemd/system/nginx.service  </span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>修改为以下内容，部分配置变量需要结合实际进行修改</p>
+   <figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"></span><br><span class="line">[Unit]</span><br><span class="line">Description=nginx - high performance web server</span><br><span class="line">Documentation=http://nginx.org/en/docs/</span><br><span class="line">After=network.target remote-fs.target nss-lookup.target</span><br><span class="line"></span><br><span class="line">[Service]</span><br><span class="line">Type=forking</span><br><span class="line">PIDFile=/usr/local/nginx/logs/nginx.pid</span><br><span class="line">ExecStartPre=/usr/local/nginx/sbin/nginx -t -c /usr/local/nginx/conf/nginx.conf</span><br><span class="line">ExecStart=/usr/local/nginx/sbin/nginx -c /usr/local/nginx/conf/nginx.conf</span><br><span class="line">ExecReload=/bin/kill -s HUP $MAINPID</span><br><span class="line">ExecStop=/bin/kill -s QUIT $MAINPID</span><br><span class="line">PrivateTmp=true</span><br><span class="line"></span><br><span class="line">[Install]</span><br><span class="line">WantedBy=multi-user.target</span><br></pre></td></tr></table></figure>
+<p>相关命令</p>
+   <figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash">开机自启动</span></span><br><span class="line">systemctl enable nginx.service</span><br><span class="line"><span class="meta">#</span><span class="bash">停止开机自启动</span></span><br><span class="line">systemctl disable nginx.service</span><br><span class="line"><span class="meta">#</span><span class="bash">查询当前状态</span></span><br><span class="line">systemctl status nginx.service</span><br><span class="line"><span class="meta">#</span><span class="bash">启动服务</span></span><br><span class="line">systemctl start nginx.service</span><br><span class="line"><span class="meta">#</span><span class="bash">重新启动服务</span></span><br><span class="line">systemctl restart nginx.service</span><br><span class="line"><span class="meta">#</span><span class="bash">停止服务</span></span><br><span class="line">systemctl stop nginx.service</span><br><span class="line"><span class="meta">#</span><span class="bash">重新加载配置</span></span><br><span class="line">systemctl reload nginx.service</span><br><span class="line"><span class="meta">#</span><span class="bash">查看所有已启动的服务</span></span><br><span class="line">systemctl list-units --type=service</span><br></pre></td></tr></table></figure>
+
+<h2 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h2><p>   <a href="https://www.nginx.com/resources/wiki/start/topics/examples/systemd/">https://www.nginx.com/resources/wiki/start/topics/examples/systemd/</a></p>
+]]></content>
+      <tags>
+        <tag>centos</tag>
+        <tag>nginx</tag>
+        <tag>不务正业</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>docker-jenkins-sonarqube</title>
+    <url>/2019/10/10/docker-jenkins-sonarqube/</url>
+    <content><![CDATA[<h1 id="jenkins联动sonarQube"><a href="#jenkins联动sonarQube" class="headerlink" title="jenkins联动sonarQube"></a>jenkins联动sonarQube</h1><h2 id="版本信息"><a href="#版本信息" class="headerlink" title="版本信息"></a>版本信息</h2><ul>
+<li>Centos 7 （安装epel-release）</li>
+<li>Docker CE:Lastest TLS</li>
+<li>Aliyun Docker Repository</li>
+<li>Python Pip</li>
+<li>Docker-Compose or K8S</li>
+</ul>
+<h2 id="Jenkins-in-Docker"><a href="#Jenkins-in-Docker" class="headerlink" title="Jenkins in Docker"></a>Jenkins in Docker</h2><figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">docker run -u root -d -p 8080:8080 -p 50000:50000 -v jenkins-data:/var/jenkins_home -v /var/run/docker.sock:/var/run/docker.sock -v /usr/java/maven:/usr/local/maven -e JAVA_OPTS=-Duser.timezone=Asia/Shanghai --name jenkins jenkins/jenkins:lts</span><br></pre></td></tr></table></figure>
+
+<p>​    对外暴露 8080为Web 访问端口 50000为API调用端口</p>
+<p>​    挂载宿主机容器卷 <strong>jenkis-data</strong> 对应容的的**/var/jenkins_home** 路径</p>
+<p>​    挂载 <strong>/var/run/docker.sock</strong> 对应容器的 <strong>/var/run/docker.sock</strong> </p>
+<p>​    挂载**/usr/java/maven** 对应容器的 <strong>/usr/local/maven</strong> </p>
+<p>​    设置容器内JAVA额外配置参数时区为<strong>上海</strong> </p>
+<p>​    命名该容器为 jenkins</p>
+<p>​    该镜像更多用法可以访问hub.docker.com 访问 jenkins:lts 进行查看</p>
+<h2 id="SonarQube-in-Docker"><a href="#SonarQube-in-Docker" class="headerlink" title="SonarQube in Docker"></a>SonarQube in Docker</h2><p>​    由于SonarQube的数据库推荐为<strong>Postgres</strong>，按照官方建议编写docker-compose.yml</p>
+<figure class="highlight yml"><table><tr><td class="code"><pre><span class="line"><span class="attr">version:</span> <span class="string">&quot;2&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="attr">services:</span></span><br><span class="line">  <span class="attr">sonarqube:</span></span><br><span class="line">    <span class="attr">image:</span> <span class="string">sonarqube</span></span><br><span class="line">    <span class="attr">ports:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">&quot;9000:9000&quot;</span></span><br><span class="line">    <span class="attr">networks:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">sonarnet</span></span><br><span class="line">    <span class="attr">environment:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">SONARQUBE_JDBC_URL=jdbc:postgresql://db:5432/sonar</span></span><br><span class="line">    <span class="attr">volumes:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">sonarqube_conf:/opt/sonarqube/conf</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">sonarqube_data:/opt/sonarqube/data</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">sonarqube_extensions:/opt/sonarqube/extensions</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">sonarqube_bundled-plugins:/opt/sonarqube/lib/bundled-plugins</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">sonarqube_temp:/opt/sonarqube/temp</span></span><br><span class="line"></span><br><span class="line">  <span class="attr">db:</span></span><br><span class="line">    <span class="attr">image:</span> <span class="string">postgres</span></span><br><span class="line">    <span class="attr">networks:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">sonarnet</span></span><br><span class="line">    <span class="attr">environment:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">POSTGRES_USER=sonar</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">POSTGRES_PASSWORD=sonar</span></span><br><span class="line">    <span class="attr">volumes:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">postgresql:/var/lib/postgresql</span></span><br><span class="line">      <span class="bullet">-</span> <span class="string">postgresql_data:/var/lib/postgresql/data</span></span><br><span class="line"></span><br><span class="line"><span class="attr">networks:</span></span><br><span class="line">  <span class="attr">sonarnet:</span></span><br><span class="line">    <span class="attr">driver:</span> <span class="string">bridge</span></span><br><span class="line"></span><br><span class="line"><span class="attr">volumes:</span></span><br><span class="line">  <span class="attr">sonarqube_conf:</span></span><br><span class="line">  <span class="attr">sonarqube_data:</span></span><br><span class="line">  <span class="attr">sonarqube_extensions:</span></span><br><span class="line">  <span class="attr">sonarqube_bundled-plugins:</span></span><br><span class="line">  <span class="attr">postgresql:</span></span><br><span class="line">  <span class="attr">postgresql_data:</span></span><br></pre></td></tr></table></figure>
+
+<p><strong>Note</strong></p>
+<pre><code>- 你也可以将SonarQube的持久化数据库更换为MYSQL，但是注意最新版本的SonarQube不再支持MYSQL
+- 更多的配置可以访问 hub.docker.com 搜索 sonarqube 进行查看
+</code></pre>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> docker-compose.yml 当前路径下</span></span><br><span class="line">docker-compose up -d # 后台运行</span><br><span class="line">docker ps # 查看进程</span><br></pre></td></tr></table></figure>
+
+<h2 id="Jenkins-插件安装"><a href="#Jenkins-插件安装" class="headerlink" title="Jenkins 插件安装"></a>Jenkins 插件安装</h2><p><strong>NOTE</strong> 由于国内访问jenkins官方源速度不够理想，建议更换为国内镜像，例如 清华镜像源</p>
+<p>安装以下插件：</p>
+<pre><code>- [Localization: Chinese (Simplified)](https://github.com/jenkinsci/localization-zh-cn-plugin)
+- [SonarQube Scanner for Jenkins](http://redirect.sonarsource.com/plugins/jenkins.html)
+- [Maven Integration plugin](https://wiki.jenkins.io/display/JENKINS/Maven+Project+Plugin)
+- [Email Ext Recipients Column Plugin](https://wiki.jenkins-ci.org/display/JENKINS/Email+Ext+Recipients+Column+Plugin)
+- [Git plugin](https://github.com/jenkinsci/git-plugin)
+- [Git client plugin](https://github.com/jenkinsci/git-client-plugin)
+- [GIT server Plugin](https://wiki.jenkins.io/display/JENKINS/Git+Server+Plugin)
+</code></pre>
+<p>##SonarQube 插件安装</p>
+<ul>
+<li>安装本地化语言插件</li>
+</ul>
+<h2 id="SonarQube-配置"><a href="#SonarQube-配置" class="headerlink" title="SonarQube 配置"></a>SonarQube 配置</h2><p>​    由于SCM轮询交由Jenkins处理，故关闭SCM轮询。</p>
+<p>![image-20191010104017484](/Users/huanghongzhi/Library/Application Support/typora-user-images/image-20191010104017484.png)</p>
+<h2 id="Jenkins-配置"><a href="#Jenkins-配置" class="headerlink" title="Jenkins 配置"></a>Jenkins 配置</h2><h3 id="配置-SonarQube-servers"><a href="#配置-SonarQube-servers" class="headerlink" title="配置 SonarQube servers"></a>配置 <strong>SonarQube servers</strong></h3><ul>
+<li>Environment variables 设置为Enable</li>
+<li>SonarQube installations <ul>
+<li>name：Jenkins 内现实该servers 的名称</li>
+<li>Server URL：SonarQube 的地址</li>
+<li>Server authentication token：默认不填</li>
+</ul>
+</li>
+</ul>
+<h3 id="配置Extended-E-mail-Notification"><a href="#配置Extended-E-mail-Notification" class="headerlink" title="配置Extended E-mail Notification"></a>配置<strong>Extended E-mail Notification</strong></h3><ul>
+<li>SMTP server </li>
+<li>Default user E-mail suffix</li>
+<li>Default Content Type ： 选择为HTML</li>
+<li>Default Subject：标题</li>
+<li>Default Content：内容</li>
+</ul>
+<p><strong>Default Subject</strong></p>
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">【系统自动发送，请勿回复】$PROJECT_NAME - Build # $BUILD_NUMBER - $BUILD_STATUS!</span><br></pre></td></tr></table></figure>
+
+<p><strong>Default Content</strong></p>
+<figure class="highlight html"><table><tr><td class="code"><pre><span class="line"><span class="meta">&lt;!DOCTYPE <span class="meta-keyword">html</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;<span class="name">html</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;<span class="name">head</span>&gt;</span>  </span><br><span class="line">  <span class="tag">&lt;<span class="name">meta</span> <span class="attr">charset</span>=<span class="string">&quot;UTF-8&quot;</span>&gt;</span>  </span><br><span class="line">  <span class="tag">&lt;<span class="name">title</span>&gt;</span>$&#123;ENV, var=&quot;JOB_NAME&quot;&#125;-第$&#123;BUILD_NUMBER&#125;次构建日志<span class="tag">&lt;/<span class="name">title</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;/<span class="name">head</span>&gt;</span>  </span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">body</span> <span class="attr">leftmargin</span>=<span class="string">&quot;8&quot;</span> <span class="attr">marginwidth</span>=<span class="string">&quot;0&quot;</span> <span class="attr">topmargin</span>=<span class="string">&quot;8&quot;</span> <span class="attr">marginheight</span>=<span class="string">&quot;4&quot;</span>  </span></span><br><span class="line"><span class="tag"><span class="attr">offset</span>=<span class="string">&quot;0&quot;</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;<span class="name">table</span> <span class="attr">width</span>=<span class="string">&quot;95%&quot;</span> <span class="attr">cellpadding</span>=<span class="string">&quot;0&quot;</span> <span class="attr">cellspacing</span>=<span class="string">&quot;0&quot;</span>  </span></span><br><span class="line"><span class="tag"><span class="attr">style</span>=<span class="string">&quot;font-size: 11pt; font-family: Tahoma, Arial, Helvetica, sans-serif&quot;</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;<span class="name">tr</span>&gt;</span>  </span><br><span class="line">  <span class="tag">&lt;<span class="name">td</span>&gt;</span><span class="tag">&lt;<span class="name">br</span> /&gt;</span>  </span><br><span class="line">    <span class="tag">&lt;<span class="name">b</span>&gt;</span><span class="tag">&lt;<span class="name">font</span> <span class="attr">color</span>=<span class="string">&quot;#0B610B&quot;</span>&gt;</span>构建信息<span class="tag">&lt;/<span class="name">font</span>&gt;</span><span class="tag">&lt;/<span class="name">b</span>&gt;</span>  </span><br><span class="line">    <span class="tag">&lt;<span class="name">hr</span> <span class="attr">size</span>=<span class="string">&quot;2&quot;</span> <span class="attr">width</span>=<span class="string">&quot;100%&quot;</span> <span class="attr">align</span>=<span class="string">&quot;center&quot;</span> /&gt;</span></span><br><span class="line">  <span class="tag">&lt;/<span class="name">td</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;/<span class="name">tr</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;<span class="name">tr</span>&gt;</span>  </span><br><span class="line">  <span class="tag">&lt;<span class="name">td</span>&gt;</span>  </span><br><span class="line">    <span class="tag">&lt;<span class="name">ul</span>&gt;</span>  </span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>项目名称 ：$&#123;PROJECT_NAME&#125;<span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建状态 ：$&#123;BUILD_STATUS&#125;<span class="tag">&lt;/<span class="name">li</span>&gt;</span></span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建编号 ：第$&#123;BUILD_NUMBER&#125;次构建<span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>触发原因 ：$&#123;CAUSE&#125;<span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建日志 ：<span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;BUILD_URL&#125;console&quot;</span>&gt;</span>$&#123;BUILD_URL&#125;console<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建URL ：<span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;BUILD_URL&#125;&quot;</span>&gt;</span>$&#123;BUILD_URL&#125;<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>工作目录 ：<span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;PROJECT_URL&#125;ws&quot;</span>&gt;</span>$&#123;PROJECT_URL&#125;ws<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">      <span class="tag">&lt;<span class="name">li</span>&gt;</span>项目URL ：<span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;PROJECT_URL&#125;&quot;</span>&gt;</span>$&#123;PROJECT_URL&#125;<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">    <span class="tag">&lt;/<span class="name">ul</span>&gt;</span>  </span><br><span class="line">  <span class="tag">&lt;/<span class="name">td</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;/<span class="name">tr</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;<span class="name">tr</span>&gt;</span>  </span><br><span class="line">  <span class="tag">&lt;<span class="name">td</span>&gt;</span><span class="tag">&lt;<span class="name">b</span>&gt;</span><span class="tag">&lt;<span class="name">font</span> <span class="attr">color</span>=<span class="string">&quot;#0B610B&quot;</span>&gt;</span>变更集<span class="tag">&lt;/<span class="name">font</span>&gt;</span><span class="tag">&lt;/<span class="name">b</span>&gt;</span>  </span><br><span class="line">    <span class="tag">&lt;<span class="name">hr</span> <span class="attr">size</span>=<span class="string">&quot;2&quot;</span> <span class="attr">width</span>=<span class="string">&quot;100%&quot;</span> <span class="attr">align</span>=<span class="string">&quot;center&quot;</span> /&gt;</span></span><br><span class="line">  <span class="tag">&lt;/<span class="name">td</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;/<span class="name">tr</span>&gt;</span>  </span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;<span class="name">tr</span>&gt;</span>  </span><br><span class="line">  <span class="tag">&lt;<span class="name">td</span>&gt;</span>$&#123;JELLY_SCRIPT,template=&quot;html&quot;&#125;<span class="tag">&lt;<span class="name">br</span>/&gt;</span>  </span><br><span class="line">    <span class="tag">&lt;<span class="name">hr</span> <span class="attr">size</span>=<span class="string">&quot;2&quot;</span> <span class="attr">width</span>=<span class="string">&quot;100%&quot;</span> <span class="attr">align</span>=<span class="string">&quot;center&quot;</span> /&gt;</span></span><br><span class="line">  <span class="tag">&lt;/<span class="name">td</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;/<span class="name">tr</span>&gt;</span>  </span><br><span class="line"></span><br><span class="line"><span class="tag">&lt;/<span class="name">table</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;/<span class="name">body</span>&gt;</span>  </span><br><span class="line"><span class="tag">&lt;/<span class="name">html</span>&gt;</span>  </span><br></pre></td></tr></table></figure>
+
+<h2 id="Jenkins-项目配置SonarQube"><a href="#Jenkins-项目配置SonarQube" class="headerlink" title="Jenkins 项目配置SonarQube"></a>Jenkins 项目配置SonarQube</h2><p>选择自动化风格项目进行项目构建</p>
+<ul>
+<li><p>丢弃旧的构建</p>
+<ul>
+<li>策略：默认</li>
+<li>保持构建的天数 ：5</li>
+<li>保持构建的最大个数：2</li>
+</ul>
+</li>
+<li><p>源码管理：SVN或Git</p>
+</li>
+<li><p>构建触发器：SCM（策略H/15 * * * *）或Git Hook</p>
+</li>
+<li><p>构建环境</p>
+<ul>
+<li><p><input checked="" disabled="" type="checkbox">  Add timestamps to the Console Output </p>
+</li>
+<li><p><input checked="" disabled="" type="checkbox">  Prepare SonarQube Scanner environment</p>
+</li>
+</ul>
+</li>
+<li><p>构建</p>
+<ul>
+<li><strong>execute SonarQube Scanner</strong><ul>
+<li>Task to run：为空</li>
+<li>JDK：默认</li>
+<li>Analysis properties ：见下文</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p>构建后操作</p>
+<ul>
+<li><strong>Editable Email Notification</strong><ul>
+<li><input disabled="" type="checkbox"> Disable Extended Email Publisher </li>
+<li>Project From:为空</li>
+<li>Project Recipient List：$DEFAULT_RECIPIENTS</li>
+<li>Project Reply-To List：$DEFAULT_REPLYTO</li>
+<li>Content Type：默认</li>
+<li>Default Subject：$DEFAULT_SUBJECT</li>
+<li>Default Content：$DEFAULT_CONTENT</li>
+<li>Pre-send Script：$DEFAULT_PRESEND_SCRIPT</li>
+<li>Post-send Script：$DEFAULT_POSTSEND_SCRIPT</li>
+<li>Triggers<ul>
+<li>配置 失败、成功的触发场景</li>
+<li>Send To 新增 <strong>Recipient List</strong></li>
+<li>添加收件人，多个用,分隔</li>
+<li>其他默认</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p>成功的邮件内容特别配置</p>
+<figure class="highlight html"><table><tr><td class="code"><pre><span class="line"><span class="meta">&lt;!DOCTYPE <span class="meta-keyword">html</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;<span class="name">html</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;<span class="name">head</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;<span class="name">meta</span> <span class="attr">charset</span>=<span class="string">&quot;UTF-8&quot;</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;<span class="name">title</span>&gt;</span>$&#123;ENV, var=&quot;JOB_NAME&quot;&#125;-第$&#123;BUILD_NUMBER&#125;次构建日志<span class="tag">&lt;/<span class="name">title</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;/<span class="name">head</span>&gt;</span>    </span><br><span class="line">    </span><br><span class="line"><span class="tag">&lt;<span class="name">body</span> <span class="attr">leftmargin</span>=<span class="string">&quot;8&quot;</span> <span class="attr">marginwidth</span>=<span class="string">&quot;0&quot;</span> <span class="attr">topmargin</span>=<span class="string">&quot;8&quot;</span> <span class="attr">marginheight</span>=<span class="string">&quot;4&quot;</span>    </span></span><br><span class="line"><span class="tag">    <span class="attr">offset</span>=<span class="string">&quot;0&quot;</span>&gt;</span>    </span><br><span class="line">    <span class="tag">&lt;<span class="name">table</span> <span class="attr">width</span>=<span class="string">&quot;95%&quot;</span> <span class="attr">cellpadding</span>=<span class="string">&quot;0&quot;</span> <span class="attr">cellspacing</span>=<span class="string">&quot;0&quot;</span>  <span class="attr">style</span>=<span class="string">&quot;font-size: 11pt; font-family: Tahoma, Arial, Helvetica, sans-serif&quot;</span>&gt;</span>    </span><br><span class="line">        <span class="tag">&lt;<span class="name">tr</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;<span class="name">br</span> /&gt;</span></span><br><span class="line">            本邮件由系统自动发出，无需回复！<span class="tag">&lt;<span class="name">br</span>/&gt;</span>            </span><br><span class="line">            各位同事，大家好，以下为$&#123;PROJECT_NAME &#125;项目构建信息<span class="tag">&lt;/<span class="name">br</span>&gt;</span> </span><br><span class="line">            <span class="tag">&lt;<span class="name">td</span>&gt;</span><span class="tag">&lt;<span class="name">font</span> <span class="attr">color</span>=<span class="string">&quot;#CC0000&quot;</span>&gt;</span>构建结果 - $&#123;BUILD_STATUS&#125;<span class="tag">&lt;/<span class="name">font</span>&gt;</span><span class="tag">&lt;/<span class="name">td</span>&gt;</span>   </span><br><span class="line">        <span class="tag">&lt;/<span class="name">tr</span>&gt;</span>    </span><br><span class="line">        <span class="tag">&lt;<span class="name">tr</span>&gt;</span>    </span><br><span class="line">            <span class="tag">&lt;<span class="name">td</span>&gt;</span><span class="tag">&lt;<span class="name">br</span> /&gt;</span>    </span><br><span class="line">            <span class="tag">&lt;<span class="name">b</span>&gt;</span><span class="tag">&lt;<span class="name">font</span> <span class="attr">color</span>=<span class="string">&quot;#0B610B&quot;</span>&gt;</span>构建信息<span class="tag">&lt;/<span class="name">font</span>&gt;</span><span class="tag">&lt;/<span class="name">b</span>&gt;</span>    </span><br><span class="line">            <span class="tag">&lt;<span class="name">hr</span> <span class="attr">size</span>=<span class="string">&quot;2&quot;</span> <span class="attr">width</span>=<span class="string">&quot;100%&quot;</span> <span class="attr">align</span>=<span class="string">&quot;center&quot;</span> /&gt;</span><span class="tag">&lt;/<span class="name">td</span>&gt;</span>    </span><br><span class="line">        <span class="tag">&lt;/<span class="name">tr</span>&gt;</span>    </span><br><span class="line">        <span class="tag">&lt;<span class="name">tr</span>&gt;</span>    </span><br><span class="line">            <span class="tag">&lt;<span class="name">td</span>&gt;</span>    </span><br><span class="line">                <span class="tag">&lt;<span class="name">ul</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>项目名称 ： $&#123;PROJECT_NAME&#125;<span class="tag">&lt;/<span class="name">li</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建编号 ： 第$&#123;BUILD_NUMBER&#125;次构建<span class="tag">&lt;/<span class="name">li</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>触发原因： $&#123;CAUSE&#125;<span class="tag">&lt;/<span class="name">li</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建状态： $&#123;BUILD_STATUS&#125;<span class="tag">&lt;/<span class="name">li</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建日志： <span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;BUILD_URL&#125;console&quot;</span>&gt;</span>$&#123;BUILD_URL&#125;console<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>构建  URL ： <span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;BUILD_URL&#125;&quot;</span>&gt;</span>$&#123;BUILD_URL&#125;<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>工作目录 ： <span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;PROJECT_URL&#125;ws&quot;</span>&gt;</span>$&#123;PROJECT_URL&#125;ws<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>    </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>项目  URL ： <span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;PROJECT_URL&#125;&quot;</span>&gt;</span>$&#123;PROJECT_URL&#125;<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span> </span><br><span class="line">                    <span class="tag">&lt;<span class="name">li</span>&gt;</span>代码质量扫描结果  URL： <span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;BUILD_LOG_REGEX, regex=&quot;</span><span class="attr">.</span>*<span class="attr">ANALYSIS</span> <span class="attr">SUCCESSFUL</span>, <span class="attr">you</span> <span class="attr">can</span> <span class="attr">browse</span> (<span class="attr">.</span>*)&quot;, <span class="attr">showTruncatedLines</span>=<span class="string">false,</span> <span class="attr">substText</span>=<span class="string">&quot;$1&quot;</span>&#125;   &quot;&gt;</span>$&#123;BUILD_LOG_REGEX, regex=&quot;.*ANALYSIS SUCCESSFUL, you can browse (.*)&quot;, showTruncatedLines=false, substText=&quot;$1&quot;&#125;   <span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;/<span class="name">li</span>&gt;</span>  </span><br><span class="line">                <span class="tag">&lt;/<span class="name">ul</span>&gt;</span>    </span><br><span class="line"> </span><br><span class="line"><span class="tag">&lt;<span class="name">h4</span>&gt;</span><span class="tag">&lt;<span class="name">font</span> <span class="attr">color</span>=<span class="string">&quot;#0B610B&quot;</span>&gt;</span>失败用例<span class="tag">&lt;/<span class="name">font</span>&gt;</span><span class="tag">&lt;/<span class="name">h4</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">hr</span> <span class="attr">size</span>=<span class="string">&quot;2&quot;</span> <span class="attr">width</span>=<span class="string">&quot;100%&quot;</span> /&gt;</span></span><br><span class="line">$FAILED_TESTS<span class="tag">&lt;<span class="name">br</span>/&gt;</span></span><br><span class="line"> </span><br><span class="line"><span class="tag">&lt;<span class="name">h4</span>&gt;</span><span class="tag">&lt;<span class="name">font</span> <span class="attr">color</span>=<span class="string">&quot;#0B610B&quot;</span>&gt;</span>最近提交(#$SVN_REVISION)<span class="tag">&lt;/<span class="name">font</span>&gt;</span><span class="tag">&lt;/<span class="name">h4</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">hr</span> <span class="attr">size</span>=<span class="string">&quot;2&quot;</span> <span class="attr">width</span>=<span class="string">&quot;100%&quot;</span> /&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">ul</span>&gt;</span></span><br><span class="line">$&#123;CHANGES_SINCE_LAST_SUCCESS, reverse=true, format=&quot;%c&quot;, changesFormat=&quot;<span class="tag">&lt;<span class="name">li</span>&gt;</span>%d [%a] %m<span class="tag">&lt;/<span class="name">li</span>&gt;</span>&quot;&#125;</span><br><span class="line"><span class="tag">&lt;/<span class="name">ul</span>&gt;</span></span><br><span class="line">详细提交: <span class="tag">&lt;<span class="name">a</span> <span class="attr">href</span>=<span class="string">&quot;$&#123;PROJECT_URL&#125;changes&quot;</span>&gt;</span>$&#123;PROJECT_URL&#125;changes<span class="tag">&lt;/<span class="name">a</span>&gt;</span><span class="tag">&lt;<span class="name">br</span>/&gt;</span></span><br><span class="line"> </span><br><span class="line">            <span class="tag">&lt;/<span class="name">td</span>&gt;</span>    </span><br><span class="line">        <span class="tag">&lt;/<span class="name">tr</span>&gt;</span>    </span><br><span class="line">    <span class="tag">&lt;/<span class="name">table</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;/<span class="name">body</span>&gt;</span>    </span><br><span class="line"><span class="tag">&lt;/<span class="name">html</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+]]></content>
+      <categories>
+        <category>工作笔记</category>
+      </categories>
+      <tags>
+        <tag>DevOPS</tag>
+        <tag>jenkins</tag>
+        <tag>sonarqube</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>docker运行nginx配置证书</title>
+    <url>/2020/11/30/docker%E8%BF%90%E8%A1%8Cnginx%E9%85%8D%E7%BD%AE%E8%AF%81%E4%B9%A6/</url>
+    <content><![CDATA[<h2 id="拉取nginx镜像"><a href="#拉取nginx镜像" class="headerlink" title="拉取nginx镜像"></a>拉取nginx镜像</h2><p><code>docker pull nginx</code></p>
+<h2 id="初始化运行"><a href="#初始化运行" class="headerlink" title="初始化运行"></a>初始化运行</h2><p><code>docker run -p 443:443 -p 80:80 --name nginx \ -v /data/nginx/html:/usr/share/nginx/html \ -v /data/nginx/logs:/var/log/nginx \ -v /data/nginx/conf/nginx.conf:/etc/nginx/nginx.conf \ -v /data/nginx/conf/cert:/etc/nginx/cert \ -v /etc/localtime:/etc/localtime \ -d nginx</code></p>
+<p>分别映射nginx的html、log、config</p>
+<p>预期会启动失败，因为/data/nginx/conf/nginx.conf : /etc/nginx/nginx.conf docker会默认mount一个文件夹，实际上是个文件</p>
+<p><code>rm -rf /data/nginx/config/nginx.conf</code></p>
+<p>创建正确的nginx配置</p>
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">worker_processes  1;</span><br><span class="line"></span><br><span class="line">error_log  &#x2F;var&#x2F;log&#x2F;nginx&#x2F;error.log warn;</span><br><span class="line">pid        &#x2F;var&#x2F;run&#x2F;nginx.pid;</span><br><span class="line"></span><br><span class="line">events &#123;</span><br><span class="line">    worker_connections  1024;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">http &#123;</span><br><span class="line">    default_type  application&#x2F;octet-stream;</span><br><span class="line"></span><br><span class="line">    log_format  main  &#39;$remote_addr - $remote_user [$time_local] &quot;$request&quot; &#39;</span><br><span class="line">                      &#39;$status $body_bytes_sent &quot;$http_referer&quot; &#39;</span><br><span class="line">                      &#39;&quot;$http_user_agent&quot; &quot;$http_x_forwarded_for&quot;&#39;;</span><br><span class="line"></span><br><span class="line">    #access_log  &#x2F;var&#x2F;log&#x2F;nginx&#x2F;access.log  main;</span><br><span class="line"></span><br><span class="line">    sendfile        on;</span><br><span class="line">    #tcp_nopush     on;</span><br><span class="line"></span><br><span class="line">    keepalive_timeout  65;</span><br><span class="line"></span><br><span class="line">    gzip  on;</span><br><span class="line">	</span><br><span class="line"></span><br><span class="line">	  server &#123;</span><br><span class="line">		listen	443;   #监听端口，ssl默认443端口。如果需要配置多个端口，可以继续添加server，用不同的端口就行</span><br><span class="line">    #证书文件名称</span><br><span class="line">    ssl_certificate #.crt; </span><br><span class="line">    #私钥文件名称</span><br><span class="line">    ssl_certificate_key #.key; </span><br><span class="line">    ssl_session_timeout 5m;</span><br><span class="line">    #请按照以下协议配置</span><br><span class="line">    ssl_protocols TLSv1 TLSv1.1 TLSv1.2; </span><br><span class="line">    #请按照以下套件配置，配置加密套件，写法遵循 openssl 标准。</span><br><span class="line">    ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:HIGH:!aNULL:!MD5:!RC4:!DHE; </span><br><span class="line">    ssl_prefer_server_ciphers on;</span><br><span class="line">    </span><br><span class="line">    server_name  ;   #服务器域名，需要和申请的证书匹配</span><br><span class="line">		</span><br><span class="line">		location &#x2F; &#123;</span><br><span class="line">			root  &#x2F;usr&#x2F;share&#x2F;nginx&#x2F;html;  #网站根目录，和容器创建时指定的位置一致</span><br><span class="line">			index index.html index.htm;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">	# 301默认跳转到443</span><br><span class="line">  server &#123;</span><br><span class="line">    listen 80;</span><br><span class="line">    #填写绑定证书的域名</span><br><span class="line">    server_name www.jq1024.com jq1024.com;</span><br><span class="line">    #把http的域名请求转成https</span><br><span class="line">    return 301 https:&#x2F;&#x2F;$host$request_uri;</span><br><span class="line">  &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="重新运行"><a href="#重新运行" class="headerlink" title="重新运行"></a>重新运行</h2><p><code>docker restart nginx</code></p>
+<p>done</p>
+]]></content>
+      <tags>
+        <tag>nginx</tag>
+        <tag>docker</tag>
+        <tag>ssl</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Hello World</title>
+    <url>/2018/05/01/hello-world/</url>
+    <content><![CDATA[<p>Welcome to <a href="https://hexo.io/">Hexo</a>! This is your very first post. Check <a href="https://hexo.io/docs/">documentation</a> for more info. If you get any problems when using Hexo, you can find the answer in <a href="https://hexo.io/docs/troubleshooting.html">troubleshooting</a> or you can ask me on <a href="https://github.com/hexojs/hexo/issues">GitHub</a>.</p>
+<h2 id="Quick-Start"><a href="#Quick-Start" class="headerlink" title="Quick Start"></a>Quick Start</h2><h3 id="Create-a-new-post"><a href="#Create-a-new-post" class="headerlink" title="Create a new post"></a>Create a new post</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">$ hexo new <span class="string">&quot;My New Post&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>More info: <a href="https://hexo.io/docs/writing.html">Writing</a></p>
+<h3 id="Run-server"><a href="#Run-server" class="headerlink" title="Run server"></a>Run server</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">$ hexo server</span><br></pre></td></tr></table></figure>
+
+<p>More info: <a href="https://hexo.io/docs/server.html">Server</a></p>
+<h3 id="Generate-static-files"><a href="#Generate-static-files" class="headerlink" title="Generate static files"></a>Generate static files</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">$ hexo generate</span><br></pre></td></tr></table></figure>
+
+<p>More info: <a href="https://hexo.io/docs/generating.html">Generating</a></p>
+<h3 id="Deploy-to-remote-sites"><a href="#Deploy-to-remote-sites" class="headerlink" title="Deploy to remote sites"></a>Deploy to remote sites</h3><figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">$ hexo deploy</span><br></pre></td></tr></table></figure>
+
+<p>More info: <a href="https://hexo.io/docs/deployment.html">Deployment</a></p>
+]]></content>
+  </entry>
+  <entry>
+    <title>http-redis</title>
+    <url>/2020/05/08/http-redis/</url>
+    <content><![CDATA[<h1 id="内存持久化方案"><a href="#内存持久化方案" class="headerlink" title="内存持久化方案"></a>内存持久化方案</h1><h2 id="前提"><a href="#前提" class="headerlink" title="前提"></a>前提</h2><p>​        方案底层不限于Redis、FastCache、Memcache。应剥离及封装底层；对外暴露为HTTP接口或Socket接口进行能力封装；</p>
+<p>​        键统一采用”prefix_主叫号码”风格进行约束</p>
+<h2 id="方案"><a href="#方案" class="headerlink" title="方案"></a>方案</h2><p>###方案一 JSON序列化</p>
+<p>优点：序列化后在终端内查看直观</p>
+<p>缺点：全部业务系统统一采用同一个JSON对象进行序列化及反序列化，拓展性不好</p>
+<p>###方案二 采用特定约束字符串分隔</p>
+<p>优点：无限拓展（只要定义好顺序）</p>
+<p>缺点：终端内不直观</p>
+<h2 id="持久化测试对比"><a href="#持久化测试对比" class="headerlink" title="持久化测试对比"></a>持久化测试对比</h2><p>将同等数量级的数据进行以上两组的序列化及反序列化调用测试QPS时间</p>
+<p>约定JSON对象</p>
+<figure class="highlight groovy"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">beans</span>&#123;</span></span><br><span class="line">  String type <span class="comment">// 开关</span></span><br><span class="line">  String prd1 <span class="comment">// 产品功能1</span></span><br><span class="line">  String prd2 <span class="comment">// 产品功能2</span></span><br><span class="line">  String prd3 <span class="comment">// 产品功能3</span></span><br><span class="line">  String prd4 <span class="comment">// 产品功能4</span></span><br><span class="line">  String prd5 <span class="comment">// 产品功能5</span></span><br><span class="line">  String prd6 <span class="comment">// 产品功能6</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>约定特定分隔符</p>
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">type|prd1|prd2|prd3|prd4|prd5|prd6</span><br></pre></td></tr></table></figure>
+
+<p>测试代码</p>
+<figure class="highlight groovy"><table><tr><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> @Author: Huanghz</span></span><br><span class="line"><span class="comment"> @Description: TODO</span></span><br><span class="line"><span class="comment"> @Date:Created in 10:03 上午 2020/5/7</span></span><br><span class="line"><span class="comment"> @ModifyBy:</span></span><br><span class="line"><span class="comment">  * */</span></span><br><span class="line"><span class="meta">@ToString</span></span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Beans</span> <span class="keyword">implements</span> <span class="title">RedisSerializerType</span> &#123;</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line">    String type</span><br><span class="line">    <span class="keyword">boolean</span> prd1</span><br><span class="line">    String prd2</span><br><span class="line">    <span class="keyword">boolean</span> prd3</span><br><span class="line">    <span class="keyword">boolean</span> prd4</span><br><span class="line">    <span class="keyword">boolean</span> prd5</span><br><span class="line">    <span class="keyword">boolean</span> prd6</span><br><span class="line"></span><br><span class="line">    Beans(String type, <span class="keyword">boolean</span> prd1, String prd2, <span class="keyword">boolean</span> prd3, <span class="keyword">boolean</span> prd4, <span class="keyword">boolean</span> prd5, <span class="keyword">boolean</span> prd6) &#123;</span><br><span class="line">        <span class="built_in">this</span>.type = type</span><br><span class="line">        <span class="built_in">this</span>.prd1 = prd1</span><br><span class="line">        <span class="built_in">this</span>.prd2 = prd2</span><br><span class="line">        <span class="built_in">this</span>.prd3 = prd3</span><br><span class="line">        <span class="built_in">this</span>.prd4 = prd4</span><br><span class="line">        <span class="built_in">this</span>.prd5 = prd5</span><br><span class="line">        <span class="built_in">this</span>.prd6 = prd6</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    Beans() &#123;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    String toRedisValue() &#123;</span><br><span class="line">        <span class="keyword">def</span> sb = <span class="keyword">new</span> StringBuffer()</span><br><span class="line">        <span class="built_in">this</span>.<span class="keyword">class</span>.declaredFields.findAll &#123; !it.synthetic &amp;&amp; !Modifier.isStatic(it.modifiers) &#125;.each &#123;</span><br><span class="line">            sb.append(<span class="built_in">this</span>.<span class="string">&quot;$it.name&quot;</span>).append(<span class="string">&#x27;|&#x27;</span>)</span><br><span class="line">        &#125;</span><br><span class="line">        sb.deleteCharAt(sb.lastIndexOf(<span class="string">&#x27;|&#x27;</span>))</span><br><span class="line">        <span class="keyword">return</span> sb.toString()</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">static</span> Beans getInstance(String redisValue) &#123;</span><br><span class="line">        instance = <span class="keyword">new</span> Beans()</span><br><span class="line">        <span class="keyword">def</span> point = <span class="number">0</span></span><br><span class="line">        <span class="keyword">def</span> values = redisValue.split(<span class="string">&#x27;\\|&#x27;</span>)</span><br><span class="line">        instance.<span class="keyword">class</span>.declaredFields.findAll &#123; !it.synthetic &amp;&amp; !Modifier.isStatic(it.modifiers) &#125;.each &#123;</span><br><span class="line">            it.setAccessible(<span class="literal">true</span>)</span><br><span class="line">            <span class="keyword">switch</span> (it.type.name) &#123;</span><br><span class="line">                <span class="keyword">case</span> <span class="string">&#x27;boolean&#x27;</span>:</span><br><span class="line">                    instance.setProperty(it.name,values[point].toUpperCase() == <span class="string">&#x27;TRUE&#x27;</span>)</span><br><span class="line">                    <span class="keyword">break</span></span><br><span class="line">                <span class="symbol">default:</span></span><br><span class="line">                    instance.setProperty(it.name,values[point])</span><br><span class="line">            &#125;</span><br><span class="line">            point++</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">return</span> instance</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">private</span> <span class="keyword">static</span> Beans instance</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">package</span> cn._118114.hangup</span><br><span class="line"></span><br><span class="line"><span class="keyword">import</span> cn._118114.hangup.beans.RedisSerializerType</span><br><span class="line"><span class="keyword">import</span> groovy.transform.ToString</span><br><span class="line"><span class="keyword">import</span> groovy.util.logging.Slf4j;</span><br><span class="line"><span class="keyword">import</span> org.springframework.boot.test.context.SpringBootTest</span><br><span class="line"><span class="keyword">import</span> org.springframework.data.redis.core.RedisTemplate</span><br><span class="line"><span class="keyword">import</span> org.springframework.data.redis.core.StringRedisTemplate</span><br><span class="line"><span class="keyword">import</span> org.junit.jupiter.api.Test</span><br><span class="line"></span><br><span class="line"><span class="keyword">import</span> javax.annotation.Resource</span><br><span class="line"><span class="keyword">import</span> java.util.concurrent.TimeUnit;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * @Author: Huanghz</span></span><br><span class="line"><span class="comment"> * @Description: Json序列化和反序列化测试</span></span><br><span class="line"><span class="comment"> * @Date:Created in 4:54 下午 2020/5/6</span></span><br><span class="line"><span class="comment"> * @ModifyBy:</span></span><br><span class="line"><span class="comment"> * */</span></span><br><span class="line"><span class="meta">@SpringBootTest</span></span><br><span class="line"><span class="meta">@Slf</span>4j</span><br><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">JsonTest</span> &#123;</span></span><br><span class="line">    <span class="keyword">final</span> <span class="keyword">static</span> _PREFIX = <span class="string">&#x27;json_&#x27;</span></span><br><span class="line">    <span class="comment">// 定义beans</span></span><br><span class="line"></span><br><span class="line">    <span class="comment">/**</span></span><br><span class="line"><span class="comment">     * 处理</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="meta">@Test</span></span><br><span class="line">    <span class="keyword">void</span> flush() &#123;</span><br><span class="line">        <span class="keyword">def</span> beans = <span class="keyword">new</span> Beans()</span><br><span class="line">        beans.type = <span class="string">&#x27;test&#x27;</span></span><br><span class="line">        beans.prd2 = <span class="string">&#x27;prd2&#x27;</span></span><br><span class="line">        log.info(<span class="string">&#x27;开始循环插入Redis&#x27;</span>)</span><br><span class="line">        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i &lt; <span class="number">100000</span>; i++) &#123;</span><br><span class="line">            redisTemplate.boundValueOps(_PREFIX + i).setIfAbsent(beans, <span class="number">5</span>, TimeUnit.MINUTES)</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&#x27;开始从Redis反序列化&#x27;</span>)</span><br><span class="line">        <span class="keyword">def</span> start = System.currentTimeMillis()</span><br><span class="line">        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i &lt; <span class="number">100000</span>; i++) &#123;</span><br><span class="line">            beans = redisTemplate.boundValueOps(_PREFIX + i).get()</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">def</span> end = System.currentTimeMillis()</span><br><span class="line">        log.info(<span class="string">&#x27;读取结束，消耗时间:&#123;&#125;&#x27;</span>, end - start)</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="meta">@Test</span></span><br><span class="line">    <span class="keyword">void</span> flush1() &#123;</span><br><span class="line">        <span class="keyword">def</span> beans = <span class="keyword">new</span> Beans()</span><br><span class="line">        beans.type = <span class="string">&#x27;test&#x27;</span></span><br><span class="line">        beans.prd2 = <span class="string">&#x27;prd2&#x27;</span></span><br><span class="line">        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">100000</span>; i &lt; <span class="number">200000</span>; i++) &#123;</span><br><span class="line">            redisTemplate.boundValueOps(_PREFIX + i).setIfAbsent(beans.toRedisValue(), <span class="number">5</span>, TimeUnit.MINUTES)</span><br><span class="line">        &#125;</span><br><span class="line">        log.info(<span class="string">&#x27;开始从Redis反序列化&#x27;</span>)</span><br><span class="line">        <span class="keyword">def</span> start = System.currentTimeMillis()</span><br><span class="line">        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">100000</span>; i &lt; <span class="number">200000</span>; i++) &#123;</span><br><span class="line">            beans = Beans.getInstance(redisTemplate.boundValueOps(_PREFIX + i).get() <span class="keyword">as</span> String)</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">def</span> end = System.currentTimeMillis()</span><br><span class="line">        log.info(<span class="string">&#x27;读取结束，消耗时间:&#123;&#125;&#x27;</span>, end - start)</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="meta">@Resource</span></span><br><span class="line">    <span class="keyword">private</span> RedisTemplate redisTemplate</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h3 id="JSON序列化方案耗时"><a href="#JSON序列化方案耗时" class="headerlink" title="JSON序列化方案耗时"></a>JSON序列化方案耗时</h3><p>测试10W条序列化反序列化耗时日志</p>
+<figure class="highlight verilog"><table><tr><td class="code"><pre><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">13</span>:<span class="number">34</span>:<span class="number">19</span><span class="variable">.593</span>  INFO <span class="number">7458</span> --- [           main] cn<span class="variable">._118114</span><span class="variable">.hangup</span><span class="variable">.JsonTest</span>               : 开始循环插入Redis</span><br><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">13</span>:<span class="number">34</span>:<span class="number">20</span><span class="variable">.425</span>  INFO <span class="number">7458</span> --- [           main] io<span class="variable">.lettuce</span><span class="variable">.core</span><span class="variable">.EpollProvider</span>            : Starting without optional epoll <span class="keyword">library</span></span><br><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">13</span>:<span class="number">34</span>:<span class="number">20</span><span class="variable">.428</span>  INFO <span class="number">7458</span> --- [           main] io<span class="variable">.lettuce</span><span class="variable">.core</span><span class="variable">.KqueueProvider</span>           : Starting without optional kqueue <span class="keyword">library</span></span><br><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">13</span>:<span class="number">34</span>:<span class="number">33</span><span class="variable">.779</span>  INFO <span class="number">7458</span> --- [           main] cn<span class="variable">._118114</span><span class="variable">.hangup</span><span class="variable">.JsonTest</span>               : 开始从Redis反序列化</span><br><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">13</span>:<span class="number">34</span>:<span class="number">43</span><span class="variable">.346</span>  INFO <span class="number">7458</span> --- [           main] cn<span class="variable">._118114</span><span class="variable">.hangup</span><span class="variable">.JsonTest</span>               : 读取结束，消耗时间:<span class="number">9551</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h3 id="自定义约定序列化耗时"><a href="#自定义约定序列化耗时" class="headerlink" title="自定义约定序列化耗时"></a>自定义约定序列化耗时</h3><figure class="highlight verilog"><table><tr><td class="code"><pre><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">10</span>:<span class="number">52</span>:<span class="number">22</span><span class="variable">.303</span>  INFO <span class="number">6554</span> --- [           main] io<span class="variable">.lettuce</span><span class="variable">.core</span><span class="variable">.EpollProvider</span>            : Starting without optional epoll <span class="keyword">library</span></span><br><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">10</span>:<span class="number">52</span>:<span class="number">22</span><span class="variable">.311</span>  INFO <span class="number">6554</span> --- [           main] io<span class="variable">.lettuce</span><span class="variable">.core</span><span class="variable">.KqueueProvider</span>           : Starting without optional kqueue <span class="keyword">library</span></span><br><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">10</span>:<span class="number">52</span>:<span class="number">41</span><span class="variable">.667</span>  INFO <span class="number">6554</span> --- [           main] cn<span class="variable">._118114</span><span class="variable">.hangup</span><span class="variable">.JsonTest</span>               : 开始从Redis反序列化</span><br><span class="line"><span class="number">2020</span>-<span class="number">05</span>-<span class="number">07</span> <span class="number">10</span>:<span class="number">52</span>:<span class="number">56</span><span class="variable">.940</span>  INFO <span class="number">6554</span> --- [           main] cn<span class="variable">._118114</span><span class="variable">.hangup</span><span class="variable">.JsonTest</span>               : 读取结束，消耗时间:<span class="number">15256</span></span><br><span class="line"></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h2 id="基于HTTP-封装内存数据库"><a href="#基于HTTP-封装内存数据库" class="headerlink" title="基于HTTP 封装内存数据库"></a>基于HTTP 封装内存数据库</h2><p>GitHub测试项目地址：<a href="https://github.com/acshmily/http-redis">https://github.com/acshmily/http-redis</a></p>
+<p>测试框架：</p>
+<p>​    Spring Boot 2.2.6、Redis连接池 Luttuce </p>
+<p>配置文件：</p>
+<figure class="highlight yaml"><table><tr><td class="code"><pre><span class="line"><span class="attr">spring:</span></span><br><span class="line">  <span class="attr">redis:</span></span><br><span class="line">    <span class="attr">host:</span> <span class="number">127.0</span><span class="number">.0</span><span class="number">.1</span></span><br><span class="line">    <span class="attr">port:</span> <span class="number">6379</span></span><br><span class="line">    <span class="attr">database:</span> <span class="number">0</span></span><br><span class="line">    <span class="attr">lettuce:</span></span><br><span class="line">      <span class="attr">pool:</span></span><br><span class="line">        <span class="attr">max-active:</span> <span class="number">8</span></span><br><span class="line">        <span class="attr">max-idle:</span> <span class="number">8</span></span><br><span class="line">        <span class="attr">min-idle:</span> <span class="number">0</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>压测结果：</p>
+<img src="/2020/05/08/http-redis/jmeter.png" class="" title="jmeter压测结果">]]></content>
+      <categories>
+        <category>工作笔记</category>
+      </categories>
+      <tags>
+        <tag>redis</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>java项目实现docker化</title>
+    <url>/2020/11/23/java%E9%A1%B9%E7%9B%AE%E5%AE%9E%E7%8E%B0docker%E5%8C%96/</url>
+    <content><![CDATA[<h2 id="Mac环境配置"><a href="#Mac环境配置" class="headerlink" title="Mac环境配置"></a>Mac环境配置</h2><p>由于我的Mac使用了<code>brew</code>管理相关组件，使用brew安装docker就可以了 </p>
+<p><code>brew cash install docker</code></p>
+<p>安装完毕后</p>
+<p>运行<code>brew verison</code>应该会正常显示docker的相关信息，由于docker安装的时候hub默认为hub.docker.com，国内访问比较缓慢，为了更好的开发效率，进行国内镜像配置，具体可以自行google，推荐 阿里云、网易云等开源服务</p>
+<p><img src="image-20201123164037294.png" alt="image-20201123164037294"></p>
+<h2 id="项目调整"><a href="#项目调整" class="headerlink" title="项目调整"></a>项目调整</h2><ol>
+<li>在项目所属的pom文件内添加docker相关maven插件</li>
+</ol>
+<figure class="highlight xml"><table><tr><td class="code"><pre><span class="line"><span class="comment">&lt;!-- Docker maven plugin --&gt;</span></span><br><span class="line">           <span class="tag">&lt;<span class="name">plugin</span>&gt;</span></span><br><span class="line">               <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>com.spotify<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">               <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>docker-maven-plugin<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line">               <span class="tag">&lt;<span class="name">version</span>&gt;</span>1.0.0<span class="tag">&lt;/<span class="name">version</span>&gt;</span></span><br><span class="line">               <span class="tag">&lt;<span class="name">configuration</span>&gt;</span></span><br><span class="line">                   <span class="tag">&lt;<span class="name">imageName</span>&gt;</span>$&#123;project.groupId&#125;/$&#123;project.artifactId&#125;:$&#123;project.version&#125;<span class="tag">&lt;/<span class="name">imageName</span>&gt;</span></span><br><span class="line">                   <span class="tag">&lt;<span class="name">dockerDirectory</span>&gt;</span>src/main/resources/docker<span class="tag">&lt;/<span class="name">dockerDirectory</span>&gt;</span></span><br><span class="line">                   <span class="tag">&lt;<span class="name">resources</span>&gt;</span></span><br><span class="line">                       <span class="tag">&lt;<span class="name">resource</span>&gt;</span></span><br><span class="line">                           <span class="tag">&lt;<span class="name">targetPath</span>&gt;</span>/<span class="tag">&lt;/<span class="name">targetPath</span>&gt;</span></span><br><span class="line">                           <span class="tag">&lt;<span class="name">directory</span>&gt;</span>$&#123;project.build.directory&#125;<span class="tag">&lt;/<span class="name">directory</span>&gt;</span></span><br><span class="line">                           <span class="tag">&lt;<span class="name">include</span>&gt;</span>$&#123;project.build.finalName&#125;.jar<span class="tag">&lt;/<span class="name">include</span>&gt;</span></span><br><span class="line">                       <span class="tag">&lt;/<span class="name">resource</span>&gt;</span></span><br><span class="line">                   <span class="tag">&lt;/<span class="name">resources</span>&gt;</span></span><br><span class="line">               <span class="tag">&lt;/<span class="name">configuration</span>&gt;</span></span><br><span class="line">           <span class="tag">&lt;/<span class="name">plugin</span>&gt;</span></span><br><span class="line">           <span class="comment">&lt;!-- Docker maven plugin --&gt;</span></span><br></pre></td></tr></table></figure>
+
+<ol start="2">
+<li>在相关项目路径src/main/resources/docker 下 创建Dockerfile文件，例如</li>
+</ol>
+<figure class="highlight dockerfile"><table><tr><td class="code"><pre><span class="line"><span class="keyword">FROM</span> java:<span class="number">8</span></span><br><span class="line"><span class="comment"># 作者</span></span><br><span class="line"><span class="keyword">MAINTAINER</span> 名字 <span class="string">&quot;邮箱&quot;</span></span><br><span class="line"><span class="comment"># 设置容器卷</span></span><br><span class="line"><span class="keyword">VOLUME</span><span class="bash"> /tmp</span></span><br><span class="line"><span class="comment"># 设置容器卷</span></span><br><span class="line"><span class="keyword">VOLUME</span><span class="bash"> /data/logs</span></span><br><span class="line"><span class="keyword">ADD</span><span class="bash"> 项目.jar /app.jar</span></span><br><span class="line"><span class="comment"># 入口</span></span><br><span class="line"><span class="keyword">ENTRYPOINT</span><span class="bash"> [<span class="string">&quot;java&quot;</span>,<span class="string">&quot;-Djava.security.egd=file:/dev/./urandom&quot;</span>,<span class="string">&quot;-jar&quot;</span>,<span class="string">&quot;/app.jar&quot;</span>]</span></span><br><span class="line"><span class="comment"># 设置环境变量</span></span><br><span class="line"><span class="keyword">RUN</span><span class="bash"> /bin/cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime &amp;&amp; <span class="built_in">echo</span> <span class="string">&#x27;Asia/Shanghai&#x27;</span> &gt;/etc/timezone</span></span><br><span class="line"><span class="comment"># 暴露端口</span></span><br><span class="line"><span class="keyword">EXPOSE</span> <span class="number">8000</span></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<ol start="3">
+<li>创建镜像</li>
+</ol>
+<p>由于我的项目是多模块项目，需要先进行jar的相关编译打包，后进行docker镜像创建，分为两部</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">mvn package -Dmaven.test.skip=true</span><br></pre></td></tr></table></figure>
+
+<p>后在相关模块内再执行</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">mvn docker:build</span><br></pre></td></tr></table></figure>
+
+<p>如果是单项目则直接可以执行</p>
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">mvn package docker:build -Dmaven.test.skip&#x3D;true </span><br></pre></td></tr></table></figure>
+
+<ol start="4">
+<li>导出镜像</li>
+</ol>
+<p>由于生产环境可能对于docker的支持不够充分，特别是私有hub管理容器之类的，此时需要手动导出相关镜像，在生产环境手动导入</p>
+<p><code>docker images</code>后会列出你已经编译好的镜像id，我们需要进行相关的导出，此处有坑，如果使用默认save则导入生产环境的时候你的REPOSITORY 和 tag 都会是 <em><none></em> ，不利于后期维护。我们需要完整指定导出</p>
+<p><code> docker save  -o ./target/打包名.tar REPOSITORY:tag</code> </p>
+<ol start="5">
+<li>生产导入</li>
+</ol>
+<p>生产环境也必须具备docker环境，将镜像包上传后进行收工导入</p>
+<p><code>docker load -i 打包名.jar</code> ，导入完毕后执行 <code>docker images</code> 确认是否与开发环境一致</p>
+<ol start="6">
+<li>启动</li>
+</ol>
+<p>由于docker可以启动多个镜像实例，所以启动命令比较复杂</p>
+<p><code>sudo docker run --name 8001 -d -e &quot;SPRING_PROFILES_ACTIVE=pre&quot; -p 8001:8000 -v /data/logs/8001:/data/logs  REPOSITORY:tag</code></p>
+<p>说明：</p>
+<p>–name 代表容器名，便于定位是哪个实例</p>
+<p>-d 后台运行</p>
+<p>-e 环境变量，由于我是springboot项目，我可以动态指定我配置文件生效的标签</p>
+<p>-p 对外暴露端口关联 宿主机端口:容器实例端口</p>
+<p>-v 映射卷，项目日志想挂载出来 宿主机的 /data/logs/8001 对应容器的/data/logs</p>
+<p>在测试环境启动遇到问题，现象为 在容器内可以访问该端口接口，在宿主机和其他机器都无法访问。STFW后确认了应该是网卡问题，按照方法进行了网卡重新生成</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> 停止服务</span></span><br><span class="line">systemctl stop docker</span><br><span class="line"><span class="meta">#</span><span class="bash"> 停用网卡</span></span><br><span class="line">ip link set dev docker0 down</span><br><span class="line"><span class="meta">#</span><span class="bash"> 删除桥接网卡</span></span><br><span class="line">brctl delbr docker0</span><br><span class="line"><span class="meta">#</span><span class="bash"> 新增桥接网卡</span></span><br><span class="line">brctl addbr docker0</span><br><span class="line"><span class="meta">#</span><span class="bash"> 为桥接网卡设置ip</span></span><br><span class="line">ip addr add 172.16.10.1/24 dev docker0</span><br><span class="line"><span class="meta">#</span><span class="bash"> 启用网卡</span></span><br><span class="line">ip link set dev docker0 up</span><br><span class="line"><span class="meta">#</span><span class="bash"> 启用docker</span></span><br><span class="line">systemctl restart docker</span><br></pre></td></tr></table></figure>
+
+
+
+]]></content>
+      <tags>
+        <tag>docker</tag>
+        <tag>java</tag>
+        <tag>springboot</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>kubernetes安装手记stage1</title>
+    <url>/2021/04/05/kubernetes%E5%AE%89%E8%A3%85%E6%89%8B%E8%AE%B0stage1/</url>
+    <content><![CDATA[<p>#kubernetes安装手记stage1    </p>
+<p>​    由于只是研究学习用，刚好公司有资源可以申请，趁着有兴趣进行了搭建一下。</p>
+<p>​    本次用到的硬件服务器约为9台，分别为：</p>
+<table>
+<thead>
+<tr>
+<th>ip</th>
+<th>配置</th>
+<th>角色</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>192.168.82.21</td>
+<td>12U 64G 500G</td>
+<td>master、node节点</td>
+</tr>
+<tr>
+<td>192.168.82.22</td>
+<td>12U 64G 500G</td>
+<td>master、node节点</td>
+</tr>
+<tr>
+<td>192.168.82.23</td>
+<td>12U 64G 500G</td>
+<td>master、node节点</td>
+</tr>
+<tr>
+<td>192.168.82.24</td>
+<td>12U 64G 500G</td>
+<td>node节点</td>
+</tr>
+<tr>
+<td>192.168.82.25</td>
+<td>12U 64G 500G</td>
+<td>node节点</td>
+</tr>
+<tr>
+<td>192.168.82.26</td>
+<td>4U 8G 500G</td>
+<td>harbor、yaml 配置节点</td>
+</tr>
+<tr>
+<td>192.168.82.27</td>
+<td>8U 16G 500G</td>
+<td>etcd 节点</td>
+</tr>
+<tr>
+<td>192.168.82.28</td>
+<td>8U 16G 500G</td>
+<td>etcd 节点</td>
+</tr>
+<tr>
+<td>192.168.82.29</td>
+<td>8U 16G 500G</td>
+<td>etcd 节点</td>
+</tr>
+<tr>
+<td>192.168.82.30</td>
+<td>4U 8G 500G</td>
+<td>keepalived节点、bind9</td>
+</tr>
+<tr>
+<td>192.168.82.31</td>
+<td>4U 8G 500G</td>
+<td>keepalived节点</td>
+</tr>
+</tbody></table>
+<h2 id="部署bind9"><a href="#部署bind9" class="headerlink" title="部署bind9"></a>部署bind9</h2><p><code>yum install bind9</code></p>
+<p>配置相关信息，主机域</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">cat &gt;/var/named/host.com.zone &lt;&lt;<span class="string">&#x27;EOF&#x27;</span></span><br><span class="line"><span class="variable">$ORIGIN</span> host.com.</span><br><span class="line"><span class="variable">$TTL</span> 600    ; 10 minutes</span><br><span class="line">@       IN SOA  dns.host.com. dnsadmin.host.com. (</span><br><span class="line">                2021033001 ; serial</span><br><span class="line">                10800      ; refresh (3 hours)</span><br><span class="line">                900        ; retry (15 minutes)</span><br><span class="line">                604800     ; expire (1 week)</span><br><span class="line">                86400      ; minimum (1 day)</span><br><span class="line">                )</span><br><span class="line">            NS   dns.host.com.</span><br><span class="line"><span class="variable">$TTL</span> 60 ; 1 minute</span><br><span class="line">dns                A    192.168.83.30</span><br><span class="line">HDSS7-21           A    192.168.82.21</span><br><span class="line">HDSS7-22           A    192.168.82.22</span><br><span class="line">HDSS7-23           A    192.168.82.23</span><br><span class="line">HDSS7-24           A    192.168.82.24</span><br><span class="line">HDSS7-25           A    192.168.82.25</span><br><span class="line">HDSS7-26           A    192.168.82.26</span><br><span class="line">HDSS7-27           A    192.168.82.27</span><br><span class="line">HDSS7-28           A    192.168.82.28</span><br><span class="line">HDSS7-29           A    192.168.82.29</span><br><span class="line">HDSS7-30           A    192.168.82.30</span><br><span class="line">HDSS7-31           A    192.168.82.31</span><br><span class="line">EOF</span><br></pre></td></tr></table></figure>
+
+<p>配置业务域</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">cat &gt;/var/named/bst.com.zone &lt;&lt;<span class="string">&#x27;EOF&#x27;</span></span><br><span class="line"><span class="variable">$ORIGIN</span> bst.com.</span><br><span class="line"><span class="variable">$TTL</span> 600    ; 10 minutes</span><br><span class="line">@       IN SOA  dns.bst.com. dnsadmin.bst.com. (</span><br><span class="line">                2021033001 ; serial</span><br><span class="line">                10800      ; refresh (3 hours)</span><br><span class="line">                900        ; retry (15 minutes)</span><br><span class="line">                604800     ; expire (1 week)</span><br><span class="line">                86400      ; minimum (1 day)</span><br><span class="line">                )</span><br><span class="line">            NS   dns.zq.com.</span><br><span class="line"><span class="variable">$TTL</span> 60 ; 1 minute</span><br><span class="line">dns                A    192.168.82.30</span><br><span class="line">harbor             A    192.168.82.26</span><br><span class="line">EOF</span><br></pre></td></tr></table></figure>
+
+<p>所有节点都需要修改DNS配置为 192.168.82.30</p>
+<h2 id="安装Docker环境"><a href="#安装Docker环境" class="headerlink" title="安装Docker环境"></a>安装Docker环境</h2><p><code>curl -fsSL https://get.docker.com | bash -s docker --mirror Aliyun</code></p>
+<p>每一台k8s节点都需要分别配置deamon.json，以182.21为例，bip为 172.7.21.1/24；同理 182.22 宿主机，则bip为 172.7.22.1/24</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">mkdir /etc/docker/</span><br><span class="line"></span><br><span class="line">cat &gt;/etc/docker/daemon.json &lt;&lt;<span class="string">EOF</span></span><br><span class="line"><span class="string">&#123;</span></span><br><span class="line"><span class="string">    &quot;graph&quot;: &quot;/data/docker&quot;,</span></span><br><span class="line"><span class="string">    &quot;storage-driver&quot;: &quot;overlay2&quot;,</span></span><br><span class="line"><span class="string">    &quot;insecure-registries&quot;: [&quot;harbor.bst.com&quot;],</span></span><br><span class="line"><span class="string">    &quot;bip&quot;: &quot;172.7.21.1/24&quot;,</span></span><br><span class="line"><span class="string">    &quot;exec-opts&quot;: [&quot;native.cgroupdriver=systemd&quot;],</span></span><br><span class="line"><span class="string">    &quot;live-restore&quot;: true</span></span><br><span class="line"><span class="string">&#125;</span></span><br><span class="line"><span class="string">EOF</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="部署harbor"><a href="#部署harbor" class="headerlink" title="部署harbor"></a>部署harbor</h2><p>安装docker-compose</p>
+<p><code>yum install epel-release -y --nogpgcheck</code></p>
+<p>离线安装harbor方式，下载地址可参考<a href="https://github.com/goharbor/harbor/releases">https://github.com/goharbor/harbor/releases</a></p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">tar xf harbor-offline-installer-v2.2.1.tgz -C /opt/</span><br><span class="line"><span class="built_in">cd</span> /opt/</span><br><span class="line">mv harbor/ harbor-v2.2.1</span><br><span class="line">ln -s /opt/harbor-v2.2.1/ /opt/harbor</span><br></pre></td></tr></table></figure>
+
+<p>修改部分配置文件,/opt/harbor/harbor.yml，以下仅为修改项目</p>
+<figure class="highlight yaml"><table><tr><td class="code"><pre><span class="line"><span class="attr">hostname:</span> <span class="string">harbor.zq.com</span></span><br><span class="line"><span class="attr">http:</span></span><br><span class="line">  <span class="attr">port:</span> <span class="number">180</span> </span><br><span class="line">  <span class="string">harbor_admin_password:Harbor12345</span></span><br><span class="line"><span class="attr">data_volume:</span> <span class="string">/data/harbor</span></span><br><span class="line"><span class="attr">log:</span></span><br><span class="line">  <span class="attr">level:</span> <span class="string">info</span></span><br><span class="line"><span class="attr">rotate_count:</span> <span class="number">50</span></span><br><span class="line"><span class="attr">rotate_size:</span> <span class="string">200M</span></span><br><span class="line"><span class="attr">location:</span> <span class="string">/data/harbor/logs</span></span><br></pre></td></tr></table></figure>
+
+<p>创建必要的存储地址</p>
+<p><code>mkdir -p /data/harbor/logs</code></p>
+<p>安装运行harbor</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line"><span class="built_in">cd</span> /opt/harbor/</span><br><span class="line">yum install docker-compose -y</span><br><span class="line">sh /opt/harbor/install.sh</span><br><span class="line">docker-compose ps</span><br><span class="line">docker ps -a</span><br></pre></td></tr></table></figure>
+
+<p>安装NGINX反代harbor服务</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">yum install nginx -y</span><br><span class="line">vim /etc/nginx/conf.d/harbor.zq.com.conf</span><br><span class="line"><span class="comment">## 添加配置yu</span></span><br><span class="line">server &#123;</span><br><span class="line">    listen 80;</span><br><span class="line">    server_name harbor.zq.com;</span><br><span class="line"></span><br><span class="line">    client_max_body_size 1000m;</span><br><span class="line"></span><br><span class="line">location / &#123;</span><br><span class="line">    proxy_pass http://127.0.0.1:180;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="配置证书环境"><a href="#配置证书环境" class="headerlink" title="配置证书环境"></a>配置证书环境</h2><p>yaml服务器，下载安装cfssl、cfssljson</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">wget https://pkg.cfssl.org/R1.2/cfssl_linux-amd64 -O /usr/bin/cfssl</span><br><span class="line">wget https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64 -O /usr/bin/cfssl-json</span><br><span class="line">wget https://pkg.cfssl.org/R1.2/cfssl-certinfo_linux-amd64 -O /usr/bin/cfssl-certinfo</span><br><span class="line">chmod +x /usr/bin/cfssl*</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>统一证书路径放在/opt/certs下，创建CA根证书、etcd服务端证书</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">cat &gt;/opt/certs/ca-csr.json &lt;&lt;<span class="string">EOF</span></span><br><span class="line"><span class="string">&#123;</span></span><br><span class="line"><span class="string">    &quot;CN&quot;: &quot;Besttone&quot;,</span></span><br><span class="line"><span class="string">    &quot;hosts&quot;: [],</span></span><br><span class="line"><span class="string">    &quot;key&quot;: &#123;</span></span><br><span class="line"><span class="string">        &quot;algo&quot;: &quot;rsa&quot;,</span></span><br><span class="line"><span class="string">        &quot;size&quot;: 2048</span></span><br><span class="line"><span class="string">    &#125;,</span></span><br><span class="line"><span class="string">    &quot;names&quot;: [</span></span><br><span class="line"><span class="string">        &#123;</span></span><br><span class="line"><span class="string">        &quot;C&quot;: &quot;CN&quot;,</span></span><br><span class="line"><span class="string">        &quot;ST&quot;: &quot;shanghai&quot;,</span></span><br><span class="line"><span class="string">        &quot;L&quot;: &quot;shanghai&quot;,</span></span><br><span class="line"><span class="string">        &quot;O&quot;: &quot;lianjie&quot;,</span></span><br><span class="line"><span class="string">        &quot;OU&quot;: &quot;ops&quot;</span></span><br><span class="line"><span class="string">        &#125;</span></span><br><span class="line"><span class="string">    ],</span></span><br><span class="line"><span class="string">    &quot;ca&quot;: &#123;</span></span><br><span class="line"><span class="string">    	&quot;expiry&quot;: &quot;175200h&quot;</span></span><br><span class="line"><span class="string">    &#125;</span></span><br><span class="line"><span class="string">&#125;</span></span><br><span class="line"><span class="string">EOF</span></span><br><span class="line">cfssl gencert -initca ca-csr.json | cfssl-json -bare ca</span><br><span class="line">cat &gt;/opt/certs/ca-config.json &lt;&lt;<span class="string">EOF</span></span><br><span class="line"><span class="string">&#123;</span></span><br><span class="line"><span class="string">    &quot;signing&quot;: &#123;</span></span><br><span class="line"><span class="string">        &quot;default&quot;: &#123;</span></span><br><span class="line"><span class="string">            &quot;expiry&quot;: &quot;175200h&quot;</span></span><br><span class="line"><span class="string">        &#125;,</span></span><br><span class="line"><span class="string">        &quot;profiles&quot;: &#123;</span></span><br><span class="line"><span class="string">            &quot;server&quot;: &#123;</span></span><br><span class="line"><span class="string">            &quot;expiry&quot;: &quot;175200h&quot;,</span></span><br><span class="line"><span class="string">            &quot;usages&quot;: [</span></span><br><span class="line"><span class="string">            &quot;signing&quot;,</span></span><br><span class="line"><span class="string">            &quot;key encipherment&quot;,</span></span><br><span class="line"><span class="string">            &quot;server auth&quot;</span></span><br><span class="line"><span class="string">            ]</span></span><br><span class="line"><span class="string">        &#125;,</span></span><br><span class="line"><span class="string">        &quot;client&quot;: &#123;</span></span><br><span class="line"><span class="string">            &quot;expiry&quot;: &quot;175200h&quot;,</span></span><br><span class="line"><span class="string">            &quot;usages&quot;: [</span></span><br><span class="line"><span class="string">            &quot;signing&quot;,</span></span><br><span class="line"><span class="string">            &quot;key encipherment&quot;,</span></span><br><span class="line"><span class="string">            &quot;client auth&quot;</span></span><br><span class="line"><span class="string">            ]</span></span><br><span class="line"><span class="string">        &#125;,</span></span><br><span class="line"><span class="string">        &quot;peer&quot;: &#123;</span></span><br><span class="line"><span class="string">            &quot;expiry&quot;: &quot;175200h&quot;,</span></span><br><span class="line"><span class="string">            &quot;usages&quot;: [</span></span><br><span class="line"><span class="string">            &quot;signing&quot;,</span></span><br><span class="line"><span class="string">            &quot;key encipherment&quot;,</span></span><br><span class="line"><span class="string">            &quot;server auth&quot;,</span></span><br><span class="line"><span class="string">            &quot;client auth&quot;</span></span><br><span class="line"><span class="string">            ]</span></span><br><span class="line"><span class="string">        &#125;</span></span><br><span class="line"><span class="string">        &#125;</span></span><br><span class="line"><span class="string">    &#125;</span></span><br><span class="line"><span class="string">&#125;</span></span><br><span class="line"><span class="string">EOF</span></span><br><span class="line">cat &gt;/opt/certs/etcd-peer-csr.json &lt;&lt;<span class="string">EOF</span></span><br><span class="line"><span class="string">&#123;</span></span><br><span class="line"><span class="string">    &quot;CN&quot;: &quot;k8s-etcd&quot;,</span></span><br><span class="line"><span class="string">    &quot;hosts&quot;: [</span></span><br><span class="line"><span class="string">        &quot;192.168.82.27&quot;,</span></span><br><span class="line"><span class="string">        &quot;192.168.82.28&quot;,</span></span><br><span class="line"><span class="string">        &quot;192.168.82.29&quot;,</span></span><br><span class="line"><span class="string">        &quot;192.168.82.30&quot;,</span></span><br><span class="line"><span class="string">        &quot;192.168.82.31&quot;</span></span><br><span class="line"><span class="string">    ],</span></span><br><span class="line"><span class="string">    &quot;key&quot;: &#123;</span></span><br><span class="line"><span class="string">        &quot;algo&quot;: &quot;rsa&quot;,</span></span><br><span class="line"><span class="string">        &quot;size&quot;: 2048</span></span><br><span class="line"><span class="string">    &#125;,</span></span><br><span class="line"><span class="string">    &quot;names&quot;: [</span></span><br><span class="line"><span class="string">    &#123;</span></span><br><span class="line"><span class="string">        &quot;C&quot;: &quot;CN&quot;,</span></span><br><span class="line"><span class="string">        &quot;ST&quot;: &quot;shanghai&quot;,</span></span><br><span class="line"><span class="string">        &quot;L&quot;: &quot;shanghai&quot;,</span></span><br><span class="line"><span class="string">        &quot;O&quot;: &quot;lianjie&quot;,</span></span><br><span class="line"><span class="string">        &quot;OU&quot;: &quot;ops&quot;</span></span><br><span class="line"><span class="string">    &#125;</span></span><br><span class="line"><span class="string">    ]</span></span><br><span class="line"><span class="string">&#125;</span></span><br><span class="line"><span class="string">EOF</span></span><br><span class="line">cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=peer etcd-peer-csr.json |cfssl-json -bare etcd-peer</span><br><span class="line"></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h2 id="配置etcd集群"><a href="#配置etcd集群" class="headerlink" title="配置etcd集群"></a>配置etcd集群</h2><p>下载etcd执行文件解压到/opt/etcd下，并下载证书</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">useradd -s /sbin/nologin -M etcd</span><br><span class="line">mkdir -p /opt/etcd/certs /data/etcd /data/logs/etcd-server</span><br><span class="line"><span class="built_in">cd</span> /opt/etcd/certs/</span><br><span class="line">wget http://yaml.bst.com/certs/ca.pem</span><br><span class="line">wget http://yaml.bst.com/certs/etcd-peer-key.pem</span><br><span class="line">wget http://yaml.bst.com/certs/etcd-peer.pem</span><br><span class="line">chmod 600 etcd-peer-key.pem</span><br><span class="line">chown -R etcd.etcd /opt/etcd</span><br><span class="line">chown -R etcd.etcd /opt/etcd-v3.2.32/</span><br><span class="line">chown -R etcd.etcd /data/logs/etcd-server/</span><br><span class="line">chown -R etcd.etcd /data/etcd</span><br></pre></td></tr></table></figure>
+
+<p>配置sh文件，每一台etcd节点配置文件稍有有不同，关注name、listen-peer-urls、initial-advertise-peer-urls</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">cat &gt;/opt/etcd/etcd-server-startup.sh &lt;&lt;<span class="string">&#x27;EOF&#x27;</span></span><br><span class="line"><span class="meta">#!/bin/sh</span></span><br><span class="line">./etcd \</span><br><span class="line">--name etcd-server-82-29 \</span><br><span class="line">--data-dir /data/etcd/etcd-server \</span><br><span class="line">--listen-peer-urls https://192.168.82.29:2380 \</span><br><span class="line">--listen-client-urls https://192.168.82.29:2379,http://127.0.0.1:2379 \</span><br><span class="line">--quota-backend-bytes 8000000000 \</span><br><span class="line">--initial-advertise-peer-urls https://192.168.82.29:2380 \</span><br><span class="line">--advertise-client-urls https://192.168.82.29:2379,http://127.0.0.1:2379 \</span><br><span class="line">--initial-cluster etcd-server-82-27=https://192.168.82.27:2380,etcd-server-82-28=https://192.168.82.28:2380,etcd-server-82-29=https://192.168.82.29:2380 \</span><br><span class="line">--ca-file ./certs/ca.pem \</span><br><span class="line">--cert-file ./certs/etcd-peer.pem \</span><br><span class="line">--key-file ./certs/etcd-peer-key.pem \</span><br><span class="line">--client-cert-auth \</span><br><span class="line">--trusted-ca-file ./certs/ca.pem \</span><br><span class="line">--peer-ca-file ./certs/ca.pem \</span><br><span class="line">--peer-cert-file ./certs/etcd-peer.pem \</span><br><span class="line">--peer-key-file ./certs/etcd-peer-key.pem \</span><br><span class="line">--peer-client-cert-auth \</span><br><span class="line">--peer-trusted-ca-file ./certs/ca.pem \</span><br><span class="line">--log-output stdout</span><br><span class="line">EOF</span><br><span class="line">chmod +x /opt/etcd/etcd-server-startup.sh</span><br></pre></td></tr></table></figure>
+
+<p>配置supervisor管理文件，并启动</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">cat &gt;/etc/supervisord.d/etcd-server.ini &lt;&lt;<span class="string">EOF</span></span><br><span class="line"><span class="string">[program:etcd-server] ; 显示的程序名,类型my.cnf,可以有多个</span></span><br><span class="line"><span class="string">command=sh /opt/etcd/etcd-server-startup.sh</span></span><br><span class="line"><span class="string">numprocs=1 ; 启动进程数 (def 1)</span></span><br><span class="line"><span class="string">directory=/opt/etcd ; 启动命令前切换的目录 (def no cwd)</span></span><br><span class="line"><span class="string">autostart=true ; 是否自启 (default: true)</span></span><br><span class="line"><span class="string">autorestart=true ; 是否自动重启 (default: true)</span></span><br><span class="line"><span class="string">startsecs=30 ; 服务运行多久判断为成功(def. 1)</span></span><br><span class="line"><span class="string">startretries=3 ; 启动重试次数 (default 3)</span></span><br><span class="line"><span class="string">exitcodes=0,2 ; 退出状态码 (default 0,2)</span></span><br><span class="line"><span class="string">stopsignal=QUIT ; 退出信号 (default TERM)</span></span><br><span class="line"><span class="string">stopwaitsecs=10 ; 退出延迟时间 (default 10)</span></span><br><span class="line"><span class="string">user=etcd ; 运行用户</span></span><br><span class="line"><span class="string">redirect_stderr=true ; 是否重定向错误输出到标准输出(def false)</span></span><br><span class="line"><span class="string">stdout_logfile=/data/logs/etcd-server/etcd.stdout.log</span></span><br><span class="line"><span class="string">stdout_logfile_maxbytes=64MB ; 日志文件大小 (default 50MB)</span></span><br><span class="line"><span class="string">stdout_logfile_backups=4 ; 日志文件滚动个数 (default 10)</span></span><br><span class="line"><span class="string">stdout_capture_maxbytes=1MB ; 设定capture管道的大小(default 0)</span></span><br><span class="line"><span class="string">;子进程还有子进程,需要添加这个参数,避免产生孤儿进程</span></span><br><span class="line"><span class="string">killasgroup=true</span></span><br><span class="line"><span class="string">stopasgroup=true</span></span><br><span class="line"><span class="string">EOF</span></span><br><span class="line"><span class="comment">## 启动服务，检查etcd集群是否正常</span></span><br><span class="line">supervisorctl update</span><br><span class="line">supervisorctl status</span><br><span class="line">netstat -lntup|grep etcd</span><br><span class="line">/opt/etcd/etcdctl cluster-health</span><br><span class="line">/opt/etcd/etcdctl member list</span><br></pre></td></tr></table></figure>
+
+
+
+]]></content>
+      <categories>
+        <category>kubernetes笔记</category>
+      </categories>
+      <tags>
+        <tag>nginx</tag>
+        <tag>springboot</tag>
+        <tag>kubernetes</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>longest-substring-without-repeating-characters</title>
+    <url>/2019/03/27/longest-substring-without-repeating-characters/</url>
+    <content><![CDATA[<h2 id="无重复字符的最长子串"><a href="#无重复字符的最长子串" class="headerlink" title="无重复字符的最长子串"></a><a href="https://leetcode-cn.com/problems/longest-substring-without-repeating-characters/">无重复字符的最长子串</a></h2><blockquote>
+<p>给定一个字符串，请你找出其中不含有重复字符的 <strong>最长子串</strong> 的长度。</p>
+<p><strong>示例 1:</strong></p>
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">输入: &quot;abcabcbb&quot;</span><br><span class="line">输出: 3 </span><br><span class="line">解释: 因为无重复字符的最长子串是 &quot;abc&quot;，所以其长度为 3。</span><br></pre></td></tr></table></figure>
+
+<p><strong>示例 2:</strong></p>
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">输入: &quot;bbbbb&quot;</span><br><span class="line">输出: 1</span><br><span class="line">解释: 因为无重复字符的最长子串是 &quot;b&quot;，所以其长度为 1。</span><br></pre></td></tr></table></figure>
+
+<p><strong>示例 3:</strong></p>
+<figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">输入: &quot;pwwkew&quot;</span><br><span class="line">输出: 3</span><br><span class="line">解释: 因为无重复字符的最长子串是 &quot;wke&quot;，所以其长度为 3。</span><br><span class="line">  请注意，你的答案必须是 子串 的长度，&quot;pwke&quot; 是一个子序列，不是子串。</span><br></pre></td></tr></table></figure>
+</blockquote>
+<h3 id="思路"><a href="#思路" class="headerlink" title="思路"></a>思路</h3><p>以示例1为例，可以主观的判断非重复的最长子串应该是 [abc]abcbb，那我们是怎么主观判断比较的呢？</p>
+<p>从示例3我们在从人类的角度观察一下，结果应该是pw[wke]w，经过示例1以及示例3我们可以得出，如果源字符串内仅存一个单一的非重复子串，则子串的第一个位置应该与子串结束后源字符串后一个字符串相同，才截断为一个子串</p>
+<p>所以我们需要一个变量来统计源字符串最长的子串长度；需要一个Map来储存非重复子串的字符串以及在源字符串中的位置(key:每一个字符 value:在源字符串中出现的位置)；还需要一个游标变量来记录当前子串在源字符串中开始的位置</p>
+<p>伪代码大概是这样的</p>
+<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">funcname</span><span class="params">(s <span class="keyword">string</span>)</span><span class="title">int</span></span>&#123;</span><br><span class="line">  maxlength := <span class="number">0</span> <span class="comment">// 保存当前非重复子串的最大长度</span></span><br><span class="line">  start := <span class="number">0</span> <span class="comment">//游标</span></span><br><span class="line">  charmap := <span class="built_in">make</span>(<span class="keyword">map</span>[<span class="keyword">string</span>]<span class="keyword">int</span>) <span class="comment">// 声明一个map来存储每一个字符出现的位置索引</span></span><br><span class="line">  <span class="keyword">for</span> i:=<span class="number">0</span>;i&lt;<span class="built_in">len</span>(s);i++&#123; <span class="comment">// 循环每一个字符</span></span><br><span class="line">    <span class="keyword">if</span> inx,ok := charmap[s[i]];ok &amp;&amp; start &lt;= inx&#123; <span class="comment">// start &lt;= inx 表示当子串开始位置小于等于当前字符在源字符串的位置，换句话说是 游标位置在 字符索引之前或当前</span></span><br><span class="line">      <span class="comment">// 当这个字符已经在map中找的到，也就意味着曾经出现过了，此时子串就应该截断了</span></span><br><span class="line">      start = i + <span class="number">1</span> <span class="comment">// 记录下一个子串是从哪儿开始判断</span></span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">if</span> i - start + <span class="number">1</span> &gt; maxlength &#123; <span class="comment">// 比较这个子串是否比之前储存的子串长度要大</span></span><br><span class="line">      maxlength = i - start + <span class="number">1</span> <span class="comment">//如果成立则将这个子串长度赋值给maxlength</span></span><br><span class="line">    &#125;</span><br><span class="line">    charmap[s[i]] = i <span class="comment">//更新这个字符串出现的位置</span></span><br><span class="line">  &#125;</span><br><span class="line">  <span class="keyword">return</span> maxlength <span class="comment">//返回最大长度</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>其中 start &lt;= inx  是为了判断游标位置是否在当前字符索引位置之前或当前，用示例1来举例：</p>
+<p>abcabcbb，当i =  3的时候 应该是讯轮到abc[a]bcbb在map中找到a曾经出现的索引位置是 0，并且游标之前还在0位置，那游标判断下一个子串开始的位置应该为 [a]的索引位置 - 游标索引位置 + 1 </p>
+<p>同时还要判断最大子串长度是否符合，i - start +  1即为截取子串的长度 i 为在当前循环中最后一次出现的相同字符索引位置 - 之前游标标定的开始位置 + 1(因为是计算长度) </p>
+<p>最后更新这个字符串出现的最后位置</p>
+]]></content>
+      <categories>
+        <category>算法</category>
+      </categories>
+      <tags>
+        <tag>Algorithms</tag>
+        <tag>Golang</tag>
+        <tag>ARTS</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>merge-two-sorted-lists</title>
+    <url>/2019/03/28/merge-two-sorted-lists/</url>
+    <content><![CDATA[]]></content>
+  </entry>
+  <entry>
+    <title>sip呼转问题</title>
+    <url>/2020/11/05/sip%E5%91%BC%E8%BD%AC%E9%97%AE%E9%A2%98/</url>
+    <content><![CDATA[<h1 id="关于SIP语音呼转问题"><a href="#关于SIP语音呼转问题" class="headerlink" title="关于SIP语音呼转问题"></a>关于SIP语音呼转问题</h1><p>​    记录一下，模拟大网呼转的时候History-info 字段必须规范，必须使用sip tag 包装主叫、被叫、并且携带IMS@域。不可用tel tag.</p>
+]]></content>
+      <categories>
+        <category>工作笔记</category>
+      </categories>
+      <tags>
+        <tag>SIP</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>安装E.L.K的笔记</title>
+    <url>/2018/10/16/%E5%AE%89%E8%A3%85E-L-K%E7%9A%84%E7%AC%94%E8%AE%B0/</url>
+    <content><![CDATA[<h1 id="关于搭建E-L-K的笔记"><a href="#关于搭建E-L-K的笔记" class="headerlink" title="关于搭建E.L.K的笔记"></a>关于搭建E.L.K的笔记</h1><p>[TOC]</p>
+<p>​    由于业务需要，需要的nginx以及系统日志进行汇总统计，并隔离开发人员对生产环境的访问。沿用比较成熟的E.L.K方案可以比较好的解决当前问题。本文仅当模拟搭建的时候进行的笔记记录，做为拾遗。安装环境为Centos7-X64，需要有外网访问权限以及yum，安装时请关闭防火墙以及IPV6网络服务。本文使用的E.L.K的大版本为6</p>
+<h2 id="安装nginx"><a href="#安装nginx" class="headerlink" title="安装nginx"></a>安装nginx</h2><p>​    采用阿里巴巴的分支tengine，具体安装请参考文档<a href="http://tengine.taobao.org/">http://tengine.taobao.org/</a> 。</p>
+<p>​    对nginx输出的日志格式进行定义，由于E.L.K的Grok比较繁琐，故采用JSON格式进行传输。对nginx.conf进行修改配置，格式参考如下：</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">      log_format json &#x27;&#123; &quot;@timestamp&quot;: &quot;$time_iso8601&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;remote_addr&quot;: &quot;$remote_addr&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;remote_user&quot;: &quot;$remote_user&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;body_bytes_sent&quot;: &quot;$body_bytes_sent&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;request_time&quot;: &quot;$request_time&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;status&quot;: &quot;$status&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;request_uri&quot;: &quot;$request_uri&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;request_method&quot;: &quot;$request_method&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;http_referrer&quot;: &quot;$http_referer&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;http_x_forwarded_for&quot;: &quot;$http_x_forwarded_for&quot;, &#x27;</span><br><span class="line">       &#x27;&quot;http_user_agent&quot;: &quot;$http_user_agent&quot;&#125;&#x27;;</span><br><span class="line">access_log /data/logs/access.log  json;</span><br><span class="line">  access_log  &quot;pipe:rollback logs/access_log interval=1d baknum=7 maxsize=2G&quot;  json;</span><br></pre></td></tr></table></figure>
+
+<p>配置完毕后可以对nginx进行reload，并尝试访问。如果正常应该返回类似如下日志：</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">114.114.114.114 - - [08/Oct/2018:21:47:04 -0400] &quot;GET / HTTP/1.1&quot; 304 0 &quot;-&quot; &quot;Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36&quot; &quot;-&quot;</span><br><span class="line">172.30.0.51 - - [08/Oct/2018:21:47:05 -0400] &quot;GET / HTTP/1.1&quot; 304 0 &quot;-&quot; &quot;Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36&quot; &quot;-&quot;</span><br></pre></td></tr></table></figure>
+
+<h2 id="安装JAVA8"><a href="#安装JAVA8" class="headerlink" title="安装JAVA8"></a>安装JAVA8</h2><p>​    由于E.L.K套件是运行在JAVA8上，所以需要安装相应依赖。</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">yum -y install java8</span><br></pre></td></tr></table></figure>
+
+<p>​    安装成功请使用</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">java -version</span><br></pre></td></tr></table></figure>
+
+<p>​    进行检测，如果显示正常的java版本则为安装成功</p>
+<h2 id="Logstash的安装和配置"><a href="#Logstash的安装和配置" class="headerlink" title="Logstash的安装和配置"></a>Logstash的安装和配置</h2><h3 id="添加E-L-K的GPG-KEY"><a href="#添加E-L-K的GPG-KEY" class="headerlink" title="添加E.L.K的GPG-KEY"></a>添加E.L.K的GPG-KEY</h3><p>​    rpm –import <a href="https://artifacts.elastic.co/GPG-KEY-elasticsearch">https://artifacts.elastic.co/GPG-KEY-elasticsearch</a> (需要关闭服务器IPV6寻址服务)<br>​    增加repo 官方文档提示为 </p>
+<blockquote>
+<p>Add the following in your /etc/yum.repos.d/ directory in a file with a .repo suffix, for example logstash.repo</p>
+</blockquote>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">[logstash-6.x]</span><br><span class="line">name=Elastic repository for 6.x packages</span><br><span class="line">baseurl=https://artifacts.elastic.co/packages/6.x/yum</span><br><span class="line">gpgcheck=1</span><br><span class="line">gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch</span><br><span class="line">enabled=1</span><br><span class="line">autorefresh=1</span><br><span class="line">type=rpm-md</span><br></pre></td></tr></table></figure>
+
+<p>​    安装logstash </p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">sudo yum install logstash</span><br></pre></td></tr></table></figure>
+
+<h3 id="对Nginx的日志进行解析配置"><a href="#对Nginx的日志进行解析配置" class="headerlink" title="对Nginx的日志进行解析配置"></a>对Nginx的日志进行解析配置</h3><h4 id="1-备份原有默认配置"><a href="#1-备份原有默认配置" class="headerlink" title="1.备份原有默认配置"></a>1.备份原有默认配置</h4><figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">mkdir /opt/backups/logstash -p</span><br><span class="line">mv /etc/logstash/logstash.yml /opt/backups/logstash/logstash.yml.BAK</span><br></pre></td></tr></table></figure>
+
+<h4 id="2-配置GeoIP"><a href="#2-配置GeoIP" class="headerlink" title="2.配置GeoIP"></a>2.配置GeoIP</h4><figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">cd /etc/logstash/</span><br><span class="line">wget http://geolite.maxmind.com/download/geoip/database/GeoLite2-City.mmdb.gz</span><br><span class="line">gunzip GeoLite2-City.mmdb.gz</span><br></pre></td></tr></table></figure>
+
+<h4 id="3-安装插件"><a href="#3-安装插件" class="headerlink" title="3.安装插件"></a>3.安装插件</h4><p>Logstash需要安装插件,跳转到lgostash/bin目录下 执行</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">1)在线安装    ./logstash-plugin install logstash-codec-json_lines</span><br><span class="line">2)离线安装    https://rubygems.org/gems/logstash-codec-json_lines</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+
+
+<h4 id="4-配置nginx的配置文件"><a href="#4-配置nginx的配置文件" class="headerlink" title="4.配置nginx的配置文件"></a>4.配置nginx的配置文件</h4><p>在路径/etc/logstash/conf.d/下创建nginx.conf，下文中的#请在使用时删除，避免无法运行</p>
+<figure class="highlight"><table><tr><td class="code"><pre><span class="line">input &#123;</span><br><span class="line">    file &#123;#文件模式解析</span><br><span class="line">        type = &gt;&quot;nginx_access&quot; #定义类型</span><br><span class="line">        path = &gt;[&quot;/data/logs/access.log&quot;] #文件路径</span><br><span class="line">        start_position = &gt;&quot;beginning&quot;#何时开始</span><br><span class="line">        sincedb_path = &gt;&quot;/dev/null&quot;#何处开始</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">&#125;</span><br><span class="line">filter &#123;</span><br><span class="line">    if [type] == &quot;nginx_access&quot; &#123;#如果为nginx_access类型</span><br><span class="line">        json &#123;</span><br><span class="line">            source = &gt;&quot;message&quot;</span><br><span class="line">            remove_field = &gt;&quot;message&quot;</span><br><span class="line">        &#125;</span><br><span class="line">        mutate &#123;</span><br><span class="line">            convert = &gt;[&quot;response&quot;, &quot;integer&quot;] </span><br><span class="line">            convert = &gt;[&quot;bytes&quot;, &quot;integer&quot;] </span><br><span class="line">            convert = &gt;[&quot;responsetime&quot;, &quot;float&quot;]</span><br><span class="line">        &#125;</span><br><span class="line">        geoip &#123;#GeoIP插件</span><br><span class="line">            source = &gt;&quot;http_x_forwarded_for&quot;</span><br><span class="line">            target = &gt;&quot;geoip&quot;</span><br><span class="line">            add_tag = &gt;[&quot;nginx-geoip&quot;] </span><br><span class="line">            database = &gt;&quot;/etc/logstash/GeoLite2-City.mmdb&quot;</span><br><span class="line">        &#125;</span><br><span class="line">        date &#123;</span><br><span class="line">            match = &gt;[&quot;timestamp&quot;, &quot;dd/MMM/YYYY:HH:mm:ss Z&quot;] </span><br><span class="line">            remove_field = &gt;[&quot;timestamp&quot;]</span><br><span class="line">        &#125;</span><br><span class="line">        useragent &#123;</span><br><span class="line">            source = &gt;&quot;agent&quot;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">    output &#123;#运往何处</span><br><span class="line">        if [type] == &quot;nginx_access&quot; &#123;</span><br><span class="line">            elasticsearch &#123;</span><br><span class="line">                hosts = &gt;[&quot;172.30.1.19:9200&quot;] #elasticsearch服务器地址</span><br><span class="line">                index = &gt;&quot;logstash-nginx-access-%&#123;+YYYY.MM.dd&#125;&quot;#索引名称</span><br><span class="line">                document_type = &gt;&quot;nginx_logs&quot;#解析模板</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        if [type] == &quot;spring_boot&quot; &#123;</span><br><span class="line">            elasticsearch &#123;</span><br><span class="line">                hosts = &gt;[&quot;172.30.1.19:9200&quot;] </span><br><span class="line">                index = &gt;&quot;springboot-%&#123;+YYYY.MM.dd&#125;&quot;</span><br><span class="line">                codec = &gt;&quot;json&quot;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br><span class="line">        stdout &#123;</span><br><span class="line">            codec = &gt;rubydebug</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="安装elasticsearch"><a href="#安装elasticsearch" class="headerlink" title="安装elasticsearch"></a>安装elasticsearch</h2><p>安装很简单不在此文具体表述，注意不要使用root账户去运行elasticsearch</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">yum -y install elasticsearch</span><br></pre></td></tr></table></figure>
+
+<p>启动执行</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">systemctl start elasticsearch.service</span><br></pre></td></tr></table></figure>
+
+<h2 id="安装kibana"><a href="#安装kibana" class="headerlink" title="安装kibana"></a>安装kibana</h2><figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">yum -y install kibana</span><br></pre></td></tr></table></figure>
+
+<p>启动</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">systemctl start kabana.service</span><br></pre></td></tr></table></figure>
+
+<h2 id="安装elasticsearch-Head"><a href="#安装elasticsearch-Head" class="headerlink" title="安装elasticsearch Head"></a>安装elasticsearch Head</h2><p>略过，请Google，无难度</p>
+<h2 id="SpringBoot日志输入到E-L-K"><a href="#SpringBoot日志输入到E-L-K" class="headerlink" title="SpringBoot日志输入到E.L.K"></a>SpringBoot日志输入到E.L.K</h2><p>项目方面增加Maven依赖</p>
+<figure class="highlight xml"><table><tr><td class="code"><pre><span class="line"><span class="tag">&lt;<span class="name">dependency</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">groupId</span>&gt;</span>net.logstash.logback<span class="tag">&lt;/<span class="name">groupId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">artifactId</span>&gt;</span>logstash-logback-encoder<span class="tag">&lt;/<span class="name">artifactId</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">version</span>&gt;</span>5.0<span class="tag">&lt;/<span class="name">version</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;/<span class="name">dependency</span>&gt;</span></span><br></pre></td></tr></table></figure>
+
+<p>如项目没有logback相关配置文件需要新建logback.xml或者修改已存在的logback配置信息</p>
+<figure class="highlight xml"><table><tr><td class="code"><pre><span class="line"><span class="meta">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;</span></span><br><span class="line"><span class="meta">&lt;!DOCTYPE <span class="meta-keyword">configuration</span>&gt;</span></span><br><span class="line"><span class="tag">&lt;<span class="name">configuration</span>&gt;</span></span><br><span class="line">    <span class="tag">&lt;<span class="name">appender</span> <span class="attr">name</span>=<span class="string">&quot;LOGSTASH&quot;</span> <span class="attr">class</span>=<span class="string">&quot;net.logstash.logback.appender.LogstashTcpSocketAppender&quot;</span>&gt;</span></span><br><span class="line">        <span class="tag">&lt;<span class="name">destination</span>&gt;</span>192.168.226.132:4560<span class="tag">&lt;/<span class="name">destination</span>&gt;</span><span class="comment">&lt;!-- logstash接收地址-&gt;</span></span><br><span class="line"><span class="comment">        &lt;encoder charset=&quot;UTF-8&quot; class=&quot;net.logstash.logback.encoder.LogstashEncoder&quot; /&gt;</span></span><br><span class="line"><span class="comment">    &lt;/appender&gt;</span></span><br><span class="line"><span class="comment">  </span></span><br><span class="line"><span class="comment">    &lt;root level=&quot;INFO&quot;&gt;</span></span><br><span class="line"><span class="comment">        &lt;appender-ref ref=&quot;LOGSTASH&quot; /&gt;</span></span><br><span class="line"><span class="comment">        &lt;appender-ref ref=&quot;CONSOLE&quot; /&gt;</span></span><br><span class="line"><span class="comment">    &lt;/root&gt;</span></span><br><span class="line"><span class="comment"> </span></span><br></pre></td></tr></table></figure>
+
+<p>增加解析Logstash的配置模板</p>
+<figure class="highlight json"><table><tr><td class="code"><pre><span class="line">input &#123;</span><br><span class="line">    tcp &#123;</span><br><span class="line">        port =&gt; 4560   </span><br><span class="line">        codec =&gt; json_lines</span><br><span class="line">		type =&gt; &quot;springboot_xxxx&quot;</span><br><span class="line">    &#125;</span><br><span class="line">	</span><br><span class="line">&#125;</span><br><span class="line">output&#123;</span><br><span class="line"></span><br><span class="line">  stdout &#123; codec =&gt; rubydebug &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<h2 id="排错"><a href="#排错" class="headerlink" title="排错"></a>排错</h2><p>E.L.K安装并不复杂，复杂是在启动配置，对于较多系统logstash配置往往会出错可以使用</p>
+<figure class="highlight shell"><table><tr><td class="code"><pre><span class="line">cat /etc/logstash/conf.d/* &gt; /tmp/total.conf</span><br></pre></td></tr></table></figure>
+
+<p>查看total.conf文件进行配置文件的定位</p>
+]]></content>
+      <categories>
+        <category>工作笔记</category>
+      </categories>
+      <tags>
+        <tag>nginx</tag>
+        <tag>springboot</tag>
+        <tag>ELK</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>新的开始</title>
+    <url>/2018/05/09/%E6%96%B0%E7%9A%84%E5%BC%80%E5%A7%8B/</url>
+    <content><![CDATA[<h2 id="说点什么"><a href="#说点什么" class="headerlink" title="说点什么"></a>说点什么</h2><p>​    年纪大了,记性越来越不好了.所以还是跟随大牛的脚步把Blog写起来吧,也好总结一下自己在工作和生活上遇到的问题以及如果解决做个记录.有时候回头看看可能会更好的学到点什么.</p>
+<p>​    给自己定个目标好了</p>
+<ul>
+<li><p>每天坚持阅读一小时</p>
+</li>
+<li><p>每周坚持锻炼</p>
+<p>作为第一篇文章可能算简单吧.不过也就暂时这样吧.    </p>
+</li>
+</ul>
+]]></content>
+      <tags>
+        <tag>hello world</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>构建centos7+jdk1.8的docker镜像</title>
+    <url>/2020/11/26/%E6%9E%84%E5%BB%BAcentos7-jdk1-8%E7%9A%84docker%E9%95%9C%E5%83%8F/</url>
+    <content><![CDATA[<h2 id="原因"><a href="#原因" class="headerlink" title="原因"></a>原因</h2><p>由于Oracle JAVA不是开源的，所以你在Docker Hub是找不到基于Oracle JAVA 的开源容器，由于目前现状来说，多数开发者还是基于Oracle java版本进行开发和运行。所以为了避免发生未知的错误，多数企业都会自己构建基于Oracle JAVA的容器。</p>
+<h2 id="准备工作"><a href="#准备工作" class="headerlink" title="准备工作"></a>准备工作</h2><ol>
+<li>阿里云Docker镜像私有化空间</li>
+<li>一台已经安装Docker服务的机器</li>
+<li>下载最新的Oracle Jdk1.8 </li>
+</ol>
+<h2 id="开始构建"><a href="#开始构建" class="headerlink" title="开始构建"></a>开始构建</h2><figure class="highlight dockerfile"><table><tr><td class="code"><pre><span class="line"><span class="comment"># 依赖上层镜像</span></span><br><span class="line"><span class="keyword">FROM</span> centos:centos7</span><br><span class="line"><span class="comment"># Dockerfile作者</span></span><br><span class="line"><span class="keyword">MAINTAINER</span> acshmily <span class="string">&quot;github.com/acshmily&quot;</span></span><br><span class="line"><span class="comment"># 创建目录</span></span><br><span class="line"><span class="keyword">RUN</span><span class="bash"> mkdir /usr/<span class="built_in">local</span>/jdk</span></span><br><span class="line"><span class="comment"># 设置工作目录</span></span><br><span class="line"><span class="keyword">WORKDIR</span><span class="bash"> /usr/<span class="built_in">local</span>/jdk</span></span><br><span class="line"><span class="comment"># 解压到 /usr/local/jdk下</span></span><br><span class="line"><span class="keyword">ADD</span><span class="bash"> jdk-8u271-linux-x64.tar.gz /usr/<span class="built_in">local</span>/jdk</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment"># 安装必要的语言环境以及网络工具，安装完毕后清理缓存</span></span><br><span class="line"><span class="keyword">RUN</span><span class="bash"> yum update -y &amp;&amp; \</span></span><br><span class="line"><span class="bash">yum reinstall -y glibc-common &amp;&amp; \</span></span><br><span class="line"><span class="bash">yum install kde-l10n-Chinese -y &amp;&amp; \</span></span><br><span class="line"><span class="bash">yum install -y telnet net-tools &amp;&amp; \</span></span><br><span class="line"><span class="bash">yum clean all &amp;&amp; \</span></span><br><span class="line"><span class="bash">rm -rf /tmp/* rm -rf /var/cache/yum/* &amp;&amp; \</span></span><br><span class="line"><span class="bash">localedef -c -f UTF-8 -i zh_CN zh_CN.UTF-8 &amp;&amp; \</span></span><br><span class="line"><span class="bash">ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime</span></span><br><span class="line"><span class="comment"># 设置环境变量</span></span><br><span class="line"><span class="keyword">ENV</span> JAVA_HOME /usr/local/jdk/jdk1.<span class="number">8.0</span>_271</span><br><span class="line"><span class="keyword">ENV</span> JRE_HOME /usr/local/jdk/jdk1.<span class="number">8.0</span>_271/jre</span><br><span class="line"><span class="keyword">ENV</span> PATH $JAVA_HOME/bin:$PATH</span><br><span class="line"><span class="keyword">ENV</span> LC_ALL zh_CN.UTF-<span class="number">8</span></span><br></pre></td></tr></table></figure>
+
+<h2 id="发布镜像"><a href="#发布镜像" class="headerlink" title="发布镜像"></a>发布镜像</h2><ol>
+<li>在阿里云创建一个空间（略）</li>
+<li>登录阿里云Docker Registry</li>
+<li><code>sudo docker tag [ImageId] Your Registry:[镜像版本号]</code></li>
+<li><code>sudo docker push  Your Registry:[镜像版本号]</code></li>
+</ol>
+]]></content>
+      <tags>
+        <tag>docker</tag>
+        <tag>java</tag>
+      </tags>
+  </entry>
+</search>
